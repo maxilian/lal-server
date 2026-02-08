@@ -16,6 +16,7 @@
 /tmp
 /playground
 /windows/bin
+/app/*/*.exe
 
 /SECRET.md
 /TODO.md
