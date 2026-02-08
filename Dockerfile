@@ -1,19 +1,18 @@
 # Build
-FROM golang:1.16.4-buster as builder
-WORKDIR /go/src/github.com/q191201771/lal
-ENV GOPROXY=https://goproxy.cn,https://goproxy.io,direct
+FROM golang:1.25-alpine as builder
+WORKDIR /lal
+ENV GOPROXY=https://goproxy.io,direct
 COPY . .
-RUN make build_for_linux
+RUN go build ./app/lalserver/main.go -o lalserver 
 
 # Output
-FROM debian:stretch-slim
-
+FROM debian:bookworm-slim
+WORKDIR /app
 EXPOSE 1935 8080 4433 5544 8083 8084 30000-30100/udp
 
-COPY --from=builder /go/src/github.com/q191201771/lal/bin/lalserver /lal/bin/lalserver
-COPY --from=builder /go/src/github.com/q191201771/lal/conf/lalserver.conf.json /lal/conf/lalserver.conf.json
-COPY --from=builder /go/src/github.com/q191201771/lal/conf/cert.pem /lal/conf/cert.pem
-COPY --from=builder /go/src/github.com/q191201771/lal/conf/key.pem /lal/conf/key.pem
+COPY --from=builder /lal/lalserver /app/lalserver
+COPY --from=builder /lal/app/conf/lalserver.conf.json /app/conf/lalserver.conf.json
+COPY --from=builder /lal/app/conf/cert.pem /app/conf/cert.pem
+COPY --from=builder /lal/app/conf/key.pem /app/conf/key.pem
 
-WORKDIR /lal
-CMD ["sh","-c","./bin/lalserver -c conf/lalserver.conf.json"]
+CMD ["sh","-c","./lalserver -c conf/lalserver.conf.json"]
