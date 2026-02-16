@@ -26,6 +26,7 @@ const (
 type ApiCtrlStartRelayPullReq struct {
 	Url                      string `json:"url"`
 	StreamName               string `json:"stream_name"`
+	AppName                  string `json:"app_name"`
 	PullTimeoutMs            int    `json:"pull_timeout_ms"`
 	PullRetryNum             int    `json:"pull_retry_num"`
 	AutoStopPullAfterNoOutMs int    `json:"auto_stop_pull_after_no_out_ms"`
@@ -103,6 +104,7 @@ type ApiCtrlStartRelayPullResp struct {
 	ApiRespBasic
 	Data struct {
 		StreamName string `json:"stream_name"`
+		AppName    string `json:"app_name"`
 		SessionId  string `json:"session_id"`
 	} `json:"data"`
 }

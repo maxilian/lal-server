@@ -9,9 +9,10 @@
 package logic
 
 import (
+	"math"
+
 	"github.com/q191201771/lal/pkg/base"
 	"github.com/q191201771/naza/pkg/bininfo"
-	"math"
 )
 
 // server_manager__api.go
@@ -69,8 +70,20 @@ func (sm *ServerManager) CtrlStartRelayPull(info base.ApiCtrlStartRelayPullReq) 
 		streamName = ctx.LastItemOfPath
 	}
 
+	//adding app_name to rename the stream url
+	appName := info.AppName
+	if appName == "" {
+		ctx, err := base.ParseUrl(info.Url, -1)
+		if err != nil {
+			ret.ErrorCode = base.ErrorCodeStartRelayPullFail
+			ret.Desp = err.Error()
+			return
+		}
+		appName = ctx.PathWithoutLastItem
+	}
+
 	// 注意，如果group不存在，我们依然relay pull
-	g := sm.getOrCreateGroup("", streamName)
+	g := sm.getOrCreateGroup(appName, streamName)
 
 	sessionId, err := g.StartPull(info)
 	if err != nil {
@@ -80,6 +93,7 @@ func (sm *ServerManager) CtrlStartRelayPull(info base.ApiCtrlStartRelayPullReq) 
 		ret.ErrorCode = base.ErrorCodeSucc
 		ret.Desp = base.DespSucc
 		ret.Data.StreamName = streamName
+		ret.Data.AppName = appName
 		ret.Data.SessionId = sessionId
 	}
 	return
