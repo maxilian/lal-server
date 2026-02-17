@@ -134,28 +134,28 @@ func (group *Group) DelHlsSubSession(session *hls.SubSession) {
 // ---------------------------------------------------------------------------------------------------------------------
 
 func (group *Group) delRtmpSubSession(session *rtmp.ServerSession) {
-	Log.Debugf("[%s] [%s] del rtmp SubSession from group.", group.UniqueKey, session.UniqueKey())
+	Log.Debugf("[%s] [%s] delete rtmp SubSession from group.", group.UniqueKey, session.UniqueKey())
 	delete(group.rtmpSubSessionSet, session)
 }
 
 func (group *Group) delHttpflvSubSession(session *httpflv.SubSession) {
-	Log.Debugf("[%s] [%s] del httpflv SubSession from group.", group.UniqueKey, session.UniqueKey())
+	Log.Debugf("[%s] [%s] delete httpflv SubSession from group.", group.UniqueKey, session.UniqueKey())
 	delete(group.httpflvSubSessionSet, session)
 }
 
 func (group *Group) delHttptsSubSession(session *httpts.SubSession) {
-	Log.Debugf("[%s] [%s] del httpts SubSession from group.", group.UniqueKey, session.UniqueKey())
+	Log.Debugf("[%s] [%s] delete httpts SubSession from group.", group.UniqueKey, session.UniqueKey())
 	delete(group.httptsSubSessionSet, session)
 }
 
 func (group *Group) delRtspSubSession(session *rtsp.SubSession) {
-	Log.Debugf("[%s] [%s] del rtsp SubSession from group.", group.UniqueKey, session.UniqueKey())
+	Log.Debugf("[%s] [%s] delete rtsp SubSession from group.", group.UniqueKey, session.UniqueKey())
 
 	delete(group.rtspSubSessionSet, session)
 }
 
 func (group *Group) delHlsSubSession(session *hls.SubSession) {
-	Log.Debugf("[%s] [%s] del hls SubSession from group.", group.UniqueKey, session.UniqueKey())
+	Log.Debugf("[%s] [%s] delete hls SubSession from group.", group.UniqueKey, session.UniqueKey())
 	delete(group.hlsSubSessionSet, session)
 }
 
