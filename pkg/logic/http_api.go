@@ -314,7 +314,6 @@ func (h *HtppApiServer) ctrlStartHttpFlvPullHandler(w http.ResponseWriter, r *ht
         }
         resp := s.sm.CtrlStartHttpflvPull(req)
         _ = json.NewEncoder(w).Encode(resp)
-    })
 } 
 
 func (h *HttpApiServer) ctrlStopHttpFlvPullHandler(w http.ResponseWriter, r *http.Request) {
@@ -329,6 +328,6 @@ func (h *HttpApiServer) ctrlStopHttpFlvPullHandler(w http.ResponseWriter, r *htt
         }
         resp := s.sm.CtrlStopHttpflvPull(req)
         _ = json.NewEncoder(w).Encode(resp)
-    })
+
 }
 
