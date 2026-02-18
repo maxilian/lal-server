@@ -10,6 +10,8 @@ package logic
 
 import (
 	"math"
+	"fmt"
+	"time"
 
 	"github.com/q191201771/lal/pkg/base"
 	"github.com/q191201771/naza/pkg/bininfo"
@@ -190,7 +192,7 @@ func (sm *ServerManager) CtrlStartHttpflvPull(info base.ApiCtrlStartHttpflvPullR
     stream := info.StreamName
     url := info.Url
     if app == "" || stream == "" || url == "" {
-        ret.ErrorCode = base.ErrorCodeParam
+        ret.ErrorCode = base.ErrorCodeHttpflvInvalidParam
         ret.Desp = "missing app_name/stream_name/url"
         return ret
     }
@@ -200,7 +202,7 @@ func (sm *ServerManager) CtrlStartHttpflvPull(info base.ApiCtrlStartHttpflvPullR
     // Create custom publisher for this group/stream.
     cps, err := group.AddCustomizePubSession(stream)
     if err != nil {
-        ret.ErrorCode = base.ErrDupInStream
+        ret.ErrorCode = base.ErrorCodeHttpflvDupInStream
         ret.Desp = err.Error()
         return ret
     }
