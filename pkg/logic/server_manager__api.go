@@ -262,8 +262,8 @@ func (sm *ServerManager) CtrlStopHttpflvPull(req base.ApiCtrlStopHttpflvPullReq)
             return true
         })
         if sid == "" {
-            ret.ErrorCode = base.ErrorCodeNotFound
-            ret.Desp = "not found"
+            ret.ErrorCode = base.ErrorCodeSessionNotFound
+			ret.Desp = base.DespSessionNotFound
             return ret
         }
     }
@@ -279,8 +279,8 @@ func (sm *ServerManager) CtrlStopHttpflvPull(req base.ApiCtrlStopHttpflvPullReq)
         return ret
     }
 
-    ret.ErrorCode = base.ErrorCodeNotFound
-    ret.Desp = "not found"
+    ret.ErrorCode = base.ErrorCodeSessionNotFound
+    ret.Desp = base.DespSessionNotFound
     return ret
 }
 
