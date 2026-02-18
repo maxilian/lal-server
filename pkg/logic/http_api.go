@@ -302,7 +302,7 @@ func unmarshalRequestJsonBody(r *http.Request, info interface{}, keyFieldList ..
 	return j, json.Unmarshal(body, info)
 }
 
-func (h *HtppApiServer) ctrlStartHttpFlvPullHandler(w http.ResponseWriter, r *http.Request) {
+func (h *HttpApiServer) ctrlStartHttpFlvPullHandler(w http.ResponseWriter, r *http.Request) {
         if r.Method != http.MethodPost {
             http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
             return
