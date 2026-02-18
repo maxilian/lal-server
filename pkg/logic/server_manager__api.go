@@ -200,7 +200,7 @@ func (sm *ServerManager) CtrlStartHttpflvPull(info base.ApiCtrlStartHttpflvPullR
     // Create custom publisher for this group/stream.
     cps, err := group.AddCustomizePubSession(stream)
     if err != nil {
-        ret.ErrorCode = base.ErrorCodeDupInStream
+        ret.ErrorCode = base.ErrDupInStream
         ret.Desp = err.Error()
         return ret
     }

@@ -91,6 +91,9 @@ var (
 
 	ErrSimpleAuthParamNotFound = errors.New("lal.logic: simple auth failed since url param lal_secret not found")
 	ErrSimpleAuthFailed        = errors.New("lal.logic: simple auth failed since url param lal_secret invalid")
+
+	ErrorCodeParam		 	   = errors.New("lal.logic: input param not found")
+
 )
 
 // ----- pkg/gb28181 ---------------------------------------------------------------------------------------------------
