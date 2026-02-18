@@ -60,6 +60,8 @@ func (h *HttpApiServer) RunLoop() error {
 
 	mux.HandleFunc("/api/ctrl/start_relay_pull", h.ctrlStartRelayPullHandler)
 	mux.HandleFunc("/api/ctrl/stop_relay_pull", h.ctrlStopRelayPullHandler)
+	mux.HandleFunc("/api/ctrl/start_httpflv_pull", h.ctrlStartHttpFlvPullHandler)
+	mux.HandleFunc("/api/ctrl/stop_httpflv_pull", h.ctrlStopHttpFlvPullHandler)
 	mux.HandleFunc("/api/ctrl/kick_session", h.ctrlKickSessionHandler)
 	mux.HandleFunc("/api/ctrl/start_rtp_pub", h.ctrlStartRtpPubHandler)
 	mux.HandleFunc("/api/ctrl/add_ip_blacklist", h.ctrlAddIpBlacklistHandler)
@@ -299,3 +301,34 @@ func unmarshalRequestJsonBody(r *http.Request, info interface{}, keyFieldList ..
 
 	return j, json.Unmarshal(body, info)
 }
+
+func (h *HtppApiServer) ctrlStartHttpFlvPullHandler(w http.ResponseWriter, r *http.Request) {
+        if r.Method != http.MethodPost {
+            http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+            return
+        }
+        var req base.ApiCtrlStartHttpflvPullReq
+        if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+            http.Error(w, err.Error(), http.StatusBadRequest)
+            return
+        }
+        resp := s.sm.CtrlStartHttpflvPull(req)
+        _ = json.NewEncoder(w).Encode(resp)
+    })
+} 
+
+func (h *HttpApiServer) ctrlStopHttpFlvPullHandler(w http.ResponseWriter, r *http.Request) {
+        if r.Method != http.MethodPost {
+            http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+            return
+        }
+        var req base.ApiCtrlStopHttpflvPullReq
+        if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+            http.Error(w, err.Error(), http.StatusBadRequest)
+            return
+        }
+        resp := s.sm.CtrlStopHttpflvPull(req)
+        _ = json.NewEncoder(w).Encode(resp)
+    })
+}
+
