@@ -3,7 +3,7 @@ FROM golang:1.25-alpine AS builder
 WORKDIR /lal
 ENV GOPROXY=https://goproxy.io,direct
 COPY . .
-RUN go build ./app/lalserver/main.go -o lalserver 
+RUN go build -o lalserver ./app/lalserver/main.go 
 
 # Output
 FROM debian:bookworm-slim
