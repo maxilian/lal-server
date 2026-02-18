@@ -9,6 +9,8 @@
 package logic
 
 import (
+	"time"
+
 	"github.com/q191201771/lal/pkg/base"
 	"github.com/q191201771/lal/pkg/remux"
 	"github.com/q191201771/naza/pkg/nazaatomic"
@@ -31,6 +33,7 @@ type CustomizePubSessionContext struct {
 	dumpFile   *base.DumpFile
 
 	disposeFlag nazaatomic.Bool
+	ControlSid  string
 }
 
 func NewCustomizePubSessionContext(streamName string) *CustomizePubSessionContext {
@@ -110,4 +113,24 @@ func (ctx *CustomizePubSessionContext) FeedRtmpMsg(msg base.RtmpMsg) error {
 	}
 	ctx.onRtmpMsg(msg)
 	return nil
+}
+
+// Add this to logic/customize_pub_session.go
+
+func (ctx *CustomizePubSessionContext) Stat() base.StatPub {
+	return base.StatPub{
+		StatSession: base.StatSession{
+			SessionId:  ctx.UniqueKey(),
+			Protocol:   "WS-FLV",
+			BaseType:   "PUB",
+			RemoteAddr: "upstream", // or track actual remote addr if available
+			StartTime:  time.Now().Format("2006-01-02 15:04:05"),
+			// Optionally fill in counters if you track them:
+			ReadBytesSum:      0,
+			WroteBytesSum:     0,
+			BitrateKbits:      0,
+			ReadBitrateKbits:  0,
+			WriteBitrateKbits: 0,
+		},
+	}
 }

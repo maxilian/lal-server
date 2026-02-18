@@ -277,6 +277,8 @@ func (group *Group) GetStat(maxsub int) base.StatGroup {
 		group.stat.StatPub = base.Session2StatPub(group.rtspPubSession)
 	} else if group.psPubSession != nil {
 		group.stat.StatPub = base.Session2StatPub(group.psPubSession)
+	} else if group.customizePubSession != nil {
+		group.stat.StatPub = group.customizePubSession.Stat()
 	} else {
 		group.stat.StatPub = base.StatPub{}
 	}

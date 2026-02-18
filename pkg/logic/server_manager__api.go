@@ -9,9 +9,7 @@
 package logic
 
 import (
-	"fmt"
 	"math"
-	"time"
 
 	"github.com/q191201771/lal/pkg/base"
 	"github.com/q191201771/lal/pkg/httpflv"
@@ -184,8 +182,6 @@ type httpflvPuller struct {
 }
 
 func (sm *ServerManager) CtrlStartHttpflvPull(info base.ApiCtrlStartHttpflvPullReq) base.ApiCtrlStartHttpflvPullResp {
-	sm.mutex.Lock()
-	defer sm.mutex.Unlock()
 	var ret base.ApiCtrlStartHttpflvPullResp
 
 	app := info.AppName
@@ -197,8 +193,8 @@ func (sm *ServerManager) CtrlStartHttpflvPull(info base.ApiCtrlStartHttpflvPullR
 		return ret
 	}
 
-	//group, _ := sm.groupManager.GetOrCreateGroup(app, stream)
-	group := sm.getOrCreateGroup(app, stream)
+	group, _ := sm.groupManager.GetOrCreateGroup(app, stream)
+	//group := sm.getOrCreateGroup(app, stream)
 
 	// Create custom publisher for this group/stream.
 	cps, err := group.AddCustomizePubSession(stream)
@@ -223,8 +219,8 @@ func (sm *ServerManager) CtrlStartHttpflvPull(info base.ApiCtrlStartHttpflvPullR
 	})
 
 	// Track and run
-	sid := fmt.Sprintf("httpflv-pull-%d", time.Now().UnixNano())
-	sm.httpflvPullers.Store(sid, &httpflvPuller{
+	//sid := fmt.Sprintf("httpflv-pull-%d", time.Now().UnixNano())
+	sm.httpflvPullers.Store(cps.UniqueKey(), &httpflvPuller{
 		session: ps,
 		app:     app,
 		stream:  stream,
@@ -235,8 +231,8 @@ func (sm *ServerManager) CtrlStartHttpflvPull(info base.ApiCtrlStartHttpflvPullR
 	go func() {
 		err := ps.Start(url)
 		// Cleanup when Start returns (error or stop)
-		if _, ok := sm.httpflvPullers.Load(sid); ok {
-			sm.httpflvPullers.Delete(sid)
+		if _, ok := sm.httpflvPullers.Load(cps.UniqueKey()); ok {
+			sm.httpflvPullers.Delete(cps.UniqueKey())
 			//group.DelCustomizePubSession(cps)
 		}
 		_ = err // optionally log
@@ -244,7 +240,7 @@ func (sm *ServerManager) CtrlStartHttpflvPull(info base.ApiCtrlStartHttpflvPullR
 
 	ret.ErrorCode = base.ErrorCodeSucc
 	ret.Desp = base.DespSucc
-	ret.Data.SessionId = sid
+	ret.Data.SessionId = cps.UniqueKey()
 	ret.Data.AppName = app
 	ret.Data.StreamName = stream
 	return ret
@@ -318,8 +314,8 @@ func (sm *ServerManager) CtrlStartWsflvPull(info base.ApiCtrlStartWsflvPullReq) 
 
 	ps := NewWsFlvPullSession(app, stream, group, cps)
 
-	sid := fmt.Sprintf("wsflv-pull-%d", time.Now().UnixNano())
-	sm.wsflvPullers.Store(sid, &wsflvPuller{
+	// sid := fmt.Sprintf("wsflv-pull-%d", time.Now().UnixNano())
+	sm.wsflvPullers.Store(cps.UniqueKey(), &wsflvPuller{
 		session: ps,
 		app:     app,
 		stream:  stream,
@@ -329,8 +325,8 @@ func (sm *ServerManager) CtrlStartWsflvPull(info base.ApiCtrlStartWsflvPullReq) 
 
 	go func() {
 		err := ps.Start(url)
-		if _, ok := sm.wsflvPullers.Load(sid); ok {
-			sm.wsflvPullers.Delete(sid)
+		if _, ok := sm.wsflvPullers.Load(cps.UniqueKey()); ok {
+			sm.wsflvPullers.Delete(cps.UniqueKey())
 			//group.DelCustomizePubSession(cps)
 		}
 		_ = err
@@ -338,7 +334,7 @@ func (sm *ServerManager) CtrlStartWsflvPull(info base.ApiCtrlStartWsflvPullReq) 
 
 	ret.ErrorCode = base.ErrorCodeSucc
 	ret.Desp = base.DespSucc
-	ret.Data.SessionId = sid
+	ret.Data.SessionId = cps.UniqueKey()
 	ret.Data.AppName = app
 	ret.Data.StreamName = stream
 	return ret
