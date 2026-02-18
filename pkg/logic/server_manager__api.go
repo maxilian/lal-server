@@ -9,15 +9,14 @@
 package logic
 
 import (
-	"math"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/q191201771/lal/pkg/base"
-	"github.com/q191201771/naza/pkg/bininfo"
 	"github.com/q191201771/lal/pkg/httpflv"
 	"github.com/q191201771/lal/pkg/remux"
-
+	"github.com/q191201771/naza/pkg/bininfo"
 )
 
 // server_manager__api.go
@@ -176,114 +175,208 @@ func (sm *ServerManager) CtrlStartRtpPub(info base.ApiCtrlStartRtpPubReq) (ret b
 	return
 }
 
-
 type httpflvPuller struct {
-    session *httpflv.PullSession
-    app     string
-    stream  string
-    cps     ICustomizePubSessionContext
-    group   *Group
+	session *httpflv.PullSession
+	app     string
+	stream  string
+	cps     ICustomizePubSessionContext
+	group   *Group
 }
 
 func (sm *ServerManager) CtrlStartHttpflvPull(info base.ApiCtrlStartHttpflvPullReq) base.ApiCtrlStartHttpflvPullResp {
-    var ret base.ApiCtrlStartHttpflvPullResp
+	sm.mutex.Lock()
+	defer sm.mutex.Unlock()
+	var ret base.ApiCtrlStartHttpflvPullResp
 
-    app := info.AppName
-    stream := info.StreamName
-    url := info.Url
-    if app == "" || stream == "" || url == "" {
-        ret.ErrorCode = base.ErrorCodeHttpflvInvalidParam
-        ret.Desp = "missing app_name/stream_name/url"
-        return ret
-    }
+	app := info.AppName
+	stream := info.StreamName
+	url := info.Url
+	if app == "" || stream == "" || url == "" {
+		ret.ErrorCode = base.ErrorCodeHttpflvInvalidParam
+		ret.Desp = "missing app_name/stream_name/url"
+		return ret
+	}
 
-    group, _ := sm.groupManager.GetOrCreateGroup(app, stream)
+	//group, _ := sm.groupManager.GetOrCreateGroup(app, stream)
+	group := sm.getOrCreateGroup(app, stream)
 
-    // Create custom publisher for this group/stream.
-    cps, err := group.AddCustomizePubSession(stream)
-    if err != nil {
-        ret.ErrorCode = base.ErrorCodeHttpflvDupInStream
-        ret.Desp = err.Error()
-        return ret
-    }
+	// Create custom publisher for this group/stream.
+	cps, err := group.AddCustomizePubSession(stream)
+	if err != nil {
+		ret.ErrorCode = base.ErrorCodeHttpflvDupInStream
+		ret.Desp = err.Error()
+		return ret
+	}
 
-    // Build HTTP-FLV pull session.
-    ps := httpflv.NewPullSession(func(opt *httpflv.PullSessionOption) {
-        if info.PullTimeoutMs > 0 {
-            opt.PullTimeoutMs = info.PullTimeoutMs
-        }
-        if info.ReadTimeoutMs > 0 {
-            opt.ReadTimeoutMs = info.ReadTimeoutMs
-        }
-    }).WithOnReadFlvTag(func(tag httpflv.Tag) {
-        // Convert FLV Tag -> RTMP Msg and feed into lal
-        msg := remux.FlvTag2RtmpMsg(tag)
-        _ = cps.FeedRtmpMsg(msg)
-    })
+	// Build HTTP-FLV pull session.
+	ps := httpflv.NewPullSession(func(opt *httpflv.PullSessionOption) {
+		if info.PullTimeoutMs > 0 {
+			opt.PullTimeoutMs = info.PullTimeoutMs
+		}
+		if info.ReadTimeoutMs > 0 {
+			opt.ReadTimeoutMs = info.ReadTimeoutMs
+		}
+	}).WithOnReadFlvTag(func(tag httpflv.Tag) {
+		// Convert FLV Tag -> RTMP Msg and feed into lal
+		msg := remux.FlvTag2RtmpMsg(tag)
+		_ = cps.FeedRtmpMsg(msg)
+	})
 
-    // Track and run
-    sid := fmt.Sprintf("httpflv-pull-%d", time.Now().UnixNano())
-    sm.httpflvPullers.Store(sid, &httpflvPuller{
-        session: ps,
-        app:     app,
-        stream:  stream,
-        cps:     cps,
-        group:   group,
-    })
+	// Track and run
+	sid := fmt.Sprintf("httpflv-pull-%d", time.Now().UnixNano())
+	sm.httpflvPullers.Store(sid, &httpflvPuller{
+		session: ps,
+		app:     app,
+		stream:  stream,
+		cps:     cps,
+		group:   group,
+	})
 
-    go func() {
-        err := ps.Start(url)
-        // Cleanup when Start returns (error or stop)
-        if _, ok := sm.httpflvPullers.Load(sid); ok {
-            sm.httpflvPullers.Delete(sid)
-            group.DelCustomizePubSession(cps)
-        }
-        _ = err // optionally log
-    }()
+	go func() {
+		err := ps.Start(url)
+		// Cleanup when Start returns (error or stop)
+		if _, ok := sm.httpflvPullers.Load(sid); ok {
+			sm.httpflvPullers.Delete(sid)
+			//group.DelCustomizePubSession(cps)
+		}
+		_ = err // optionally log
+	}()
 
-    ret.ErrorCode = base.ErrorCodeSucc
-    ret.Desp = base.DespSucc
-    ret.Data.SessionId = sid
-    ret.Data.AppName = app
-    ret.Data.StreamName = stream
-    return ret
+	ret.ErrorCode = base.ErrorCodeSucc
+	ret.Desp = base.DespSucc
+	ret.Data.SessionId = sid
+	ret.Data.AppName = app
+	ret.Data.StreamName = stream
+	return ret
 }
 
 func (sm *ServerManager) CtrlStopHttpflvPull(req base.ApiCtrlStopHttpflvPullReq) base.ApiCtrlStopHttpflvPullResp {
-    var ret base.ApiCtrlStopHttpflvPullResp
+	var ret base.ApiCtrlStopHttpflvPullResp
 
-    // Resolve session by id or (app, stream)
-    sid := req.SessionId
-    if sid == "" {
-        sm.httpflvPullers.Range(func(key, value any) bool {
-            p := value.(*httpflvPuller)
-            if p.app == req.AppName && p.stream == req.StreamName {
-                sid = key.(string)
-                return false
-            }
-            return true
-        })
-        if sid == "" {
-            ret.ErrorCode = base.ErrorCodeSessionNotFound
+	// Resolve session by id or (app, stream)
+	sid := req.SessionId
+	if sid == "" {
+		sm.httpflvPullers.Range(func(key, value any) bool {
+			p := value.(*httpflvPuller)
+			if p.app == req.AppName && p.stream == req.StreamName {
+				sid = key.(string)
+				return false
+			}
+			return true
+		})
+		if sid == "" {
+			ret.ErrorCode = base.ErrorCodeSessionNotFound
 			ret.Desp = base.DespSessionNotFound
-            return ret
-        }
-    }
+			return ret
+		}
+	}
 
-    if v, ok := sm.httpflvPullers.Load(sid); ok {
-        p := v.(*httpflvPuller)
-        _ = p.session.Dispose()               // stop upstream pull
-        p.group.DelCustomizePubSession(p.cps) // detach publisher
-        sm.httpflvPullers.Delete(sid)
+	if v, ok := sm.httpflvPullers.Load(sid); ok {
+		p := v.(*httpflvPuller)
+		_ = p.session.Dispose()               // stop upstream pull
+		p.group.DelCustomizePubSession(p.cps) // detach publisher
+		sm.httpflvPullers.Delete(sid)
 
-        ret.ErrorCode = base.ErrorCodeSucc
-        ret.Desp = base.DespSucc
-        return ret
-    }
+		ret.ErrorCode = base.ErrorCodeSucc
+		ret.Desp = base.DespSucc
+		return ret
+	}
 
-    ret.ErrorCode = base.ErrorCodeSessionNotFound
-    ret.Desp = base.DespSessionNotFound
-    return ret
+	ret.ErrorCode = base.ErrorCodeSessionNotFound
+	ret.Desp = base.DespSessionNotFound
+	return ret
 }
 
+type wsflvPuller struct {
+	session *WsFlvPullSession
+	app     string
+	stream  string
+	cps     ICustomizePubSessionContext
+	group   *Group
+}
 
+func (sm *ServerManager) CtrlStartWsflvPull(info base.ApiCtrlStartWsflvPullReq) base.ApiCtrlStartWsflvPullResp {
+	var ret base.ApiCtrlStartWsflvPullResp
+
+	app := info.AppName
+	stream := info.StreamName
+	url := info.Url
+	if app == "" || stream == "" || url == "" {
+		ret.ErrorCode = base.ErrorCodeHttpflvInvalidParam
+		ret.Desp = "missing app_name/stream_name/url"
+		return ret
+	}
+
+	group, _ := sm.groupManager.GetOrCreateGroup(app, stream)
+
+	cps, err := group.AddCustomizePubSession(stream)
+	if err != nil {
+		ret.ErrorCode = base.ErrorCodeHttpflvDupInStream
+		ret.Desp = err.Error()
+		return ret
+	}
+
+	ps := NewWsFlvPullSession(app, stream, group, cps)
+
+	sid := fmt.Sprintf("wsflv-pull-%d", time.Now().UnixNano())
+	sm.wsflvPullers.Store(sid, &wsflvPuller{
+		session: ps,
+		app:     app,
+		stream:  stream,
+		cps:     cps,
+		group:   group,
+	})
+
+	go func() {
+		err := ps.Start(url)
+		if _, ok := sm.wsflvPullers.Load(sid); ok {
+			sm.wsflvPullers.Delete(sid)
+			//group.DelCustomizePubSession(cps)
+		}
+		_ = err
+	}()
+
+	ret.ErrorCode = base.ErrorCodeSucc
+	ret.Desp = base.DespSucc
+	ret.Data.SessionId = sid
+	ret.Data.AppName = app
+	ret.Data.StreamName = stream
+	return ret
+}
+
+func (sm *ServerManager) CtrlStopWsflvPull(req base.ApiCtrlStopWsflvPullReq) base.ApiCtrlStopWsflvPullResp {
+	var ret base.ApiCtrlStopWsflvPullResp
+
+	sid := req.SessionId
+	if sid == "" {
+		sm.wsflvPullers.Range(func(key, value any) bool {
+			p := value.(*wsflvPuller)
+			if p.app == req.AppName && p.stream == req.StreamName {
+				sid = key.(string)
+				return false
+			}
+			return true
+		})
+		if sid == "" {
+			ret.ErrorCode = base.ErrorCodeSessionNotFound
+			ret.Desp = base.DespSessionNotFound
+			return ret
+		}
+	}
+
+	if v, ok := sm.wsflvPullers.Load(sid); ok {
+		p := v.(*wsflvPuller)
+		_ = p.session.Stop()                  // stop upstream pull
+		p.group.DelCustomizePubSession(p.cps) // detach publisher
+		sm.wsflvPullers.Delete(sid)
+
+		ret.ErrorCode = base.ErrorCodeSucc
+		ret.Desp = base.DespSucc
+		ret.Data.SessionId = sid
+		return ret
+	}
+
+	ret.ErrorCode = base.ErrorCodeSessionNotFound
+	ret.Desp = base.DespSessionNotFound
+	return ret
+}
