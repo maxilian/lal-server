@@ -184,8 +184,7 @@ type httpflvPuller struct {
 }
 
 func (sm *ServerManager) CtrlStartHttpflvPull(info base.ApiCtrlStartHttpflvPullReq) base.ApiCtrlStartHttpflvPullResp {
-	sm.mutex.Lock()
-	defer sm.mutex.Unlock()
+	
 	var ret base.ApiCtrlStartHttpflvPullResp
 
 	app := info.AppName
