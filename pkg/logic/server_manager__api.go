@@ -235,7 +235,7 @@ func (sm *ServerManager) CtrlStartHttpflvPull(info base.ApiCtrlStartHttpflvPullR
 		// Cleanup when Start returns (error or stop)
 		if _, ok := sm.httpflvPullers.Load(sid); ok {
 			sm.httpflvPullers.Delete(sid)
-			//group.DelCustomizePubSession(cps)
+			group.DelCustomizePubSession(cps)
 		}
 		_ = err // optionally log
 	}()
@@ -340,7 +340,7 @@ func (sm *ServerManager) CtrlStartWsflvPull(info base.ApiCtrlStartWsflvPullReq) 
 		err := ps.Start(url)
 		if _, ok := sm.wsflvPullers.Load(sid); ok {
 			sm.wsflvPullers.Delete(sid)
-			//group.DelCustomizePubSession(cps)
+			group.DelCustomizePubSession(cps)
 		}
 		_ = err
 	}()
