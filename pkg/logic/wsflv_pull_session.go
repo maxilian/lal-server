@@ -159,11 +159,9 @@ package logic
 
 import (
 	"bytes"
-	"context"
-	"errors"
 	"io"
-	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -176,122 +174,95 @@ type WsFlvPullSession struct {
 	appName    string
 	streamName string
 
-	group *Group
-	cps   ICustomizePubSessionContext
+	url string
 
-	conn   *websocket.Conn
-	ctx    context.Context
-	cancel context.CancelFunc
+	conn *websocket.Conn
+	mu   sync.Mutex
 
-	mutex   sync.Mutex
-	running bool
+	parserBuf bytes.Buffer
 
-	wg sync.WaitGroup
+	cps ICustomizePubSessionContext
+
+	stopped atomic.Bool
 }
 
 func NewWsFlvPullSession(
-	app string,
-	stream string,
+	appName string,
+	streamName string,
 	group *Group,
 	cps ICustomizePubSessionContext,
 ) *WsFlvPullSession {
 
-	ctx, cancel := context.WithCancel(context.Background())
-
 	return &WsFlvPullSession{
-		appName:    app,
-		streamName: stream,
-		group:      group,
+		appName:    appName,
+		streamName: streamName,
 		cps:        cps,
-		ctx:        ctx,
-		cancel:     cancel,
 	}
 }
 
-func (s *WsFlvPullSession) Start(rawURL string) error {
+func (s *WsFlvPullSession) Start(url string) error {
 
-	s.mutex.Lock()
-	if s.running {
-		s.mutex.Unlock()
-		return errors.New("already running")
+	s.url = url
+
+	for !s.stopped.Load() {
+
+		err := s.connectAndRead()
+
+		if s.stopped.Load() {
+			return nil
+		}
+
+		Log.Warnf("wsflv pull error. stream=%s err=%v",
+			s.streamName, err)
+
+		time.Sleep(3 * time.Second)
 	}
-	s.running = true
-	s.mutex.Unlock()
-
-	s.wg.Add(1)
-
-	go s.loop(rawURL)
 
 	return nil
 }
 
 func (s *WsFlvPullSession) Stop() {
 
-	s.cancel()
+	if s.stopped.CompareAndSwap(false, true) {
 
-	s.mutex.Lock()
+		s.mu.Lock()
 
-	if s.conn != nil {
-		s.conn.Close()
-	}
-
-	s.mutex.Unlock()
-
-	s.wg.Wait()
-}
-
-func (s *WsFlvPullSession) loop(rawURL string) {
-
-	defer s.wg.Done()
-
-	retryDelay := 3 * time.Second
-
-	for {
-
-		select {
-		case <-s.ctx.Done():
-			return
-		default:
+		if s.conn != nil {
+			_ = s.conn.Close()
 		}
 
-		err := s.connectAndRead(rawURL)
-
-		if err != nil {
-			Log.Warnf("wsflv pull error. stream=%s err=%v", s.streamName, err)
-		}
-
-		select {
-		case <-s.ctx.Done():
-			return
-		case <-time.After(retryDelay):
-		}
+		s.mu.Unlock()
 	}
 }
 
-func (s *WsFlvPullSession) connectAndRead(rawURL string) error {
-
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return err
-	}
+func (s *WsFlvPullSession) connectAndRead() error {
 
 	dialer := websocket.DefaultDialer
 
-	conn, _, err := dialer.Dial(u.String(), nil)
+	conn, _, err := dialer.Dial(s.url, nil)
 	if err != nil {
 		return err
 	}
 
-	s.mutex.Lock()
+	Log.Infof("wsflv connected. stream=%s url=%s",
+		s.streamName, s.url)
+
+	s.mu.Lock()
 	s.conn = conn
-	s.mutex.Unlock()
+	s.mu.Unlock()
 
-	defer conn.Close()
+	defer func() {
+		s.mu.Lock()
+		if s.conn != nil {
+			s.conn.Close()
+			s.conn = nil
+		}
+		s.mu.Unlock()
+	}()
 
-	return s.readLoop(conn)
-}
+	s.parserBuf.Reset()
 
-func (s *WsFlvPullSession) readLoop(conn *websocket.Conn) error {
+	flvHeaderSkipped := false
 
 	for {
 
@@ -300,59 +271,61 @@ func (s *WsFlvPullSession) readLoop(conn *websocket.Conn) error {
 			return err
 		}
 
-		reader := bytes.NewReader(data)
+		s.parserBuf.Write(data)
+
+		// Skip FLV header once
+		if !flvHeaderSkipped {
+
+			if s.parserBuf.Len() < 13 {
+				continue
+			}
+
+			header := s.parserBuf.Next(13)
+
+			if string(header[:3]) != "FLV" {
+				Log.Errorf("invalid flv header")
+				return io.ErrUnexpectedEOF
+			}
+
+			flvHeaderSkipped = true
+
+			Log.Infof("wsflv header skipped. stream=%s", s.streamName)
+		}
 
 		for {
 
+			reader := bytes.NewReader(s.parserBuf.Bytes())
+
 			tag, err := httpflv.ReadTag(reader)
 
-			if err == io.EOF {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
 				break
 			}
 
 			if err != nil {
-				return err
+
+				Log.Warnf("flv parse error: %v", err)
+
+				s.parserBuf.Reset()
+				flvHeaderSkipped = false
+
+				break
 			}
 
-			msg := remux.FlvTag2RtmpMsg(tag)
+			rtmpMsg := remux.FlvTag2RtmpMsg(tag)
 
-			err = s.cps.FeedRtmpMsg(msg)
+			err = s.cps.FeedRtmpMsg(rtmpMsg)
 			if err != nil {
 				return err
 			}
+
+			consumed := len(s.parserBuf.Bytes()) - reader.Len()
+
+			if consumed <= 0 {
+				break
+			}
+
+			s.parserBuf.Next(consumed)
 		}
 	}
-}
-
-type WsMessageReader struct {
-	conn *websocket.Conn
-	buf  []byte
-	pos  int
-}
-
-func NewWsMessageReader(conn *websocket.Conn) *WsMessageReader {
-	return &WsMessageReader{
-		conn: conn,
-	}
-}
-
-func (r *WsMessageReader) Read(p []byte) (int, error) {
-
-	if r.pos >= len(r.buf) {
-
-		_, msg, err := r.conn.ReadMessage()
-
-		if err != nil {
-			return 0, err
-		}
-
-		r.buf = msg
-		r.pos = 0
-	}
-
-	n := copy(p, r.buf[r.pos:])
-
-	r.pos += n
-
-	return n, nil
 }
