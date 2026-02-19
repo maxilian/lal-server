@@ -24,7 +24,7 @@ type CustomizePubSessionOption struct {
 type ModCustomizePubSessionOptionFn func(option *CustomizePubSessionOption)
 
 type CustomizePubSessionContext struct {
-	uniqueKey string
+	uniqueKey  string
 	ControlSid string
 	streamName string
 	remuxer    *remux.AvPacket2RtmpRemuxer
@@ -35,9 +35,9 @@ type CustomizePubSessionContext struct {
 	disposeFlag nazaatomic.Bool
 	startedAt   time.Time
 
-    // optional metadata for pretty stats
-    protocol   string // e.g., "WS-FLV", "HTTP-FLV"
-    remoteAddr string // e.g., "upstream"
+	// optional metadata for pretty stats
+	protocol   string // e.g., "WS-FLV", "HTTP-FLV"
+	remoteAddr string // e.g., "upstream"
 
 }
 
@@ -47,8 +47,8 @@ func NewCustomizePubSessionContext(streamName string) *CustomizePubSessionContex
 		streamName: streamName,
 		remuxer:    remux.NewAvPacket2RtmpRemuxer(),
 		startedAt:  time.Now(),
-        protocol:   "CUSTOMIZE-PUB",
-        remoteAddr: "upstream",
+		protocol:   "CUSTOMIZE-PUB",
+		remoteAddr: "upstream",
 	}
 	nazalog.Infof("[%s] NewCustomizePubSessionContext.", s.uniqueKey)
 	return s
@@ -81,6 +81,10 @@ func (ctx *CustomizePubSessionContext) StreamName() string {
 func (ctx *CustomizePubSessionContext) Dispose() {
 	nazalog.Infof("[%s] CustomizePubSessionContext::Dispose.", ctx.uniqueKey)
 	ctx.disposeFlag.Store(true)
+	if ctx.dumpFile != nil {
+		_ = ctx.dumpFile.Close()
+		ctx.dumpFile = nil
+	}
 }
 
 // -----implement of base.IAvPacketStream ------------------------------------------------------------------------------
@@ -119,59 +123,60 @@ func (ctx *CustomizePubSessionContext) FeedRtmpMsg(msg base.RtmpMsg) error {
 	if ctx.disposeFlag.Load() {
 		return base.ErrDisposedInStream
 	}
-	ctx.onRtmpMsg(msg)
+
+	if ctx.onRtmpMsg != nil {
+		ctx.onRtmpMsg(msg)
+	}
+
 	return nil
 }
 
-
-func (ctx *CustomizePubSessionContext) SetControlSessionID(id string) { 
-	ctx.ControlSid = id 
+func (ctx *CustomizePubSessionContext) SetControlSessionID(id string) {
+	ctx.ControlSid = id
 }
 
 func (ctx *CustomizePubSessionContext) WithControlSessionID(id string) *CustomizePubSessionContext {
-    ctx.ControlSid = id
-    return ctx
+	ctx.ControlSid = id
+	return ctx
 }
 
-func (ctx *CustomizePubSessionContext) SetProtocol(proto string) { 
-	if proto != "" { 
-		ctx.protocol = proto 
-	} 
+func (ctx *CustomizePubSessionContext) SetProtocol(proto string) {
+	if proto != "" {
+		ctx.protocol = proto
+	}
 }
 
 func (ctx *CustomizePubSessionContext) WithProtocol(proto string) *CustomizePubSessionContext {
-    ctx.SetProtocol(proto)
-    return ctx
+	ctx.SetProtocol(proto)
+	return ctx
 }
-func 
-(ctx *CustomizePubSessionContext) SetRemoteAddr(addr string) { 
-	if addr != "" { 
-		ctx.remoteAddr = addr 
-	} 
+func (ctx *CustomizePubSessionContext) SetRemoteAddr(addr string) {
+	if addr != "" {
+		ctx.remoteAddr = addr
+	}
 }
 
 func (ctx *CustomizePubSessionContext) WithRemoteAddr(addr string) *CustomizePubSessionContext {
-    ctx.SetRemoteAddr(addr)
-    return ctx
+	ctx.SetRemoteAddr(addr)
+	return ctx
 }
 
-func (ctx *CustomizePubSessionContext) ExternalID() string  { 
-	return ctx.ControlSid 
-}   // EXTERNAL (optional)
-
+func (ctx *CustomizePubSessionContext) ExternalID() string {
+	return ctx.ControlSid
+} // EXTERNAL (optional)
 
 // Add this to logic/customize_pub_session.go
 
 func (ctx *CustomizePubSessionContext) Stat() base.StatPub {
 	return base.StatPub{
 		StatSession: base.StatSession{
-			SessionId:  ctx.UniqueKey(),
-			
+			SessionId: ctx.UniqueKey(),
+
 			ExtSessionId: ctx.ControlSid, // EXTERNAL (for clients/tools)
-            Protocol:     ctx.protocol,
-            BaseType:     "PUB",
-            RemoteAddr:   ctx.remoteAddr,
-            StartTime:    ctx.startedAt.Format("2006-01-02 15:04:05"),
+			Protocol:     ctx.protocol,
+			BaseType:     "PUB",
+			RemoteAddr:   ctx.remoteAddr,
+			StartTime:    ctx.startedAt.Format("2006-01-02 15:04:05"),
 
 			// Optionally fill in counters if you track them:
 			ReadBytesSum:      0,
