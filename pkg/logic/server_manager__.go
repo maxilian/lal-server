@@ -55,7 +55,9 @@ type ServerManager struct {
 
 	notifyHandlerThread taskpool.Pool
 
-	ipBlacklist IpBlacklist
+	ipBlacklist    IpBlacklist
+	httpflvPullers sync.Map
+	wsflvPullers   sync.Map
 }
 
 func NewServerManager(modOption ...ModOption) *ServerManager {

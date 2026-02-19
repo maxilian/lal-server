@@ -91,6 +91,9 @@ var (
 
 	ErrSimpleAuthParamNotFound = errors.New("lal.logic: simple auth failed since url param lal_secret not found")
 	ErrSimpleAuthFailed        = errors.New("lal.logic: simple auth failed since url param lal_secret invalid")
+
+	ErrCodeParam		 	   = errors.New("lal.logic: input param not found")
+
 )
 
 // ----- pkg/gb28181 ---------------------------------------------------------------------------------------------------
@@ -100,3 +103,10 @@ var (
 )
 
 // ---------------------------------------------------------------------------------------------------------------------
+
+
+const (
+    ErrorCodeHttpflvInvalidParam = 44001
+    ErrorCodeHttpflvDupInStream  = 44002
+    ErrorCodeHttpflvNotFound     = 44004
+)

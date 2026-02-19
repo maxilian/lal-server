@@ -51,6 +51,10 @@ type ILalServer interface {
 	CtrlStartRelayPull(info base.ApiCtrlStartRelayPullReq) base.ApiCtrlStartRelayPullResp
 	CtrlStopRelayPull(streamName string) base.ApiCtrlStopRelayPullResp
 	CtrlKickSession(info base.ApiCtrlKickSessionReq) base.ApiCtrlKickSessionResp
+	CtrlStartHttpflvPull(info base.ApiCtrlStartHttpflvPullReq) base.ApiCtrlStartHttpflvPullResp
+	CtrlStopHttpflvPull(info base.ApiCtrlStopHttpflvPullReq) base.ApiCtrlStopHttpflvPullResp
+	CtrlStartWsflvPull(info base.ApiCtrlStartWsflvPullReq) base.ApiCtrlStartWsflvPullResp
+	CtrlStopWsflvPull(info base.ApiCtrlStopWsflvPullReq) base.ApiCtrlStopWsflvPullResp
 }
 
 // NewLalServer 创建一个lal server
