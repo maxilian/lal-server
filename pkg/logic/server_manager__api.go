@@ -184,7 +184,7 @@ type httpflvPuller struct {
 }
 
 func (sm *ServerManager) CtrlStartHttpflvPull(info base.ApiCtrlStartHttpflvPullReq) base.ApiCtrlStartHttpflvPullResp {
-	
+
 	var ret base.ApiCtrlStartHttpflvPullResp
 
 	app := info.AppName
@@ -300,15 +300,22 @@ func (sm *ServerManager) CtrlStartWsflvPull(info base.ApiCtrlStartWsflvPullReq) 
 	app := info.AppName
 	stream := info.StreamName
 	url := info.Url
+
 	if app == "" || stream == "" || url == "" {
 		ret.ErrorCode = base.ErrorCodeHttpflvInvalidParam
 		ret.Desp = "missing app_name/stream_name/url"
 		return ret
 	}
 
-	group, _ := sm.groupManager.GetOrCreateGroup(app, stream)
+	// CRITICAL: protect with mutex
+	sm.mutex.Lock()
+
+	group := sm.getOrCreateGroup(app, stream)
 
 	cps, err := group.AddCustomizePubSession(stream)
+
+	sm.mutex.Unlock()
+
 	if err != nil {
 		ret.ErrorCode = base.ErrorCodeHttpflvDupInStream
 		ret.Desp = err.Error()
@@ -318,6 +325,7 @@ func (sm *ServerManager) CtrlStartWsflvPull(info base.ApiCtrlStartWsflvPullReq) 
 	ps := NewWsFlvPullSession(app, stream, group, cps)
 
 	sid := fmt.Sprintf("wsflv-pull-%d", time.Now().UnixNano())
+
 	sm.wsflvPullers.Store(sid, &wsflvPuller{
 		session: ps,
 		app:     app,
@@ -328,11 +336,24 @@ func (sm *ServerManager) CtrlStartWsflvPull(info base.ApiCtrlStartWsflvPullReq) 
 
 	go func() {
 		err := ps.Start(url)
-		if _, ok := sm.wsflvPullers.Load(sid); ok {
+
+		// cleanup safely
+		sm.mutex.Lock()
+
+		if v, ok := sm.wsflvPullers.Load(sid); ok {
+
+			p := v.(*wsflvPuller)
+
+			p.group.DelCustomizePubSession(p.cps)
+
 			sm.wsflvPullers.Delete(sid)
-			//group.DelCustomizePubSession(cps)
 		}
-		_ = err
+
+		sm.mutex.Unlock()
+
+		if err != nil {
+			Log.Errorf("wsflv pull stopped. err=%v", err)
+		}
 	}()
 
 	ret.ErrorCode = base.ErrorCodeSucc
@@ -340,22 +361,30 @@ func (sm *ServerManager) CtrlStartWsflvPull(info base.ApiCtrlStartWsflvPullReq) 
 	ret.Data.SessionId = sid
 	ret.Data.AppName = app
 	ret.Data.StreamName = stream
+
 	return ret
 }
 
 func (sm *ServerManager) CtrlStopWsflvPull(req base.ApiCtrlStopWsflvPullReq) base.ApiCtrlStopWsflvPullResp {
+
 	var ret base.ApiCtrlStopWsflvPullResp
 
 	sid := req.SessionId
+
 	if sid == "" {
+
 		sm.wsflvPullers.Range(func(key, value any) bool {
+
 			p := value.(*wsflvPuller)
+
 			if p.app == req.AppName && p.stream == req.StreamName {
 				sid = key.(string)
 				return false
 			}
+
 			return true
 		})
+
 		if sid == "" {
 			ret.ErrorCode = base.ErrorCodeSessionNotFound
 			ret.Desp = base.DespSessionNotFound
@@ -363,19 +392,30 @@ func (sm *ServerManager) CtrlStopWsflvPull(req base.ApiCtrlStopWsflvPullReq) bas
 		}
 	}
 
-	if v, ok := sm.wsflvPullers.Load(sid); ok {
-		p := v.(*wsflvPuller)
-		_ = p.session.Stop()                  // stop upstream pull
-		p.group.DelCustomizePubSession(p.cps) // detach publisher
-		sm.wsflvPullers.Delete(sid)
+	v, ok := sm.wsflvPullers.Load(sid)
 
-		ret.ErrorCode = base.ErrorCodeSucc
-		ret.Desp = base.DespSucc
-		ret.Data.SessionId = sid
+	if !ok {
+		ret.ErrorCode = base.ErrorCodeSessionNotFound
+		ret.Desp = base.DespSessionNotFound
 		return ret
 	}
 
-	ret.ErrorCode = base.ErrorCodeSessionNotFound
-	ret.Desp = base.DespSessionNotFound
+	p := v.(*wsflvPuller)
+
+	// Stop session first (no mutex needed)
+	p.session.Stop()
+
+	// CRITICAL: mutex required for group operation
+	sm.mutex.Lock()
+
+	p.group.DelCustomizePubSession(p.cps)
+
+	sm.wsflvPullers.Delete(sid)
+
+	sm.mutex.Unlock()
+
+	ret.ErrorCode = base.ErrorCodeSucc
+	ret.Desp = base.DespSucc
+
 	return ret
 }
