@@ -63,6 +63,7 @@ type RecordPerSec struct {
 
 type StatSession struct {
 	SessionId  string `json:"session_id"`
+    ExtSessionId     string `json:"ext_session_id,omitempty"`
 	Protocol   string `json:"protocol"`
 	BaseType   string `json:"base_type"`
 	RemoteAddr string `json:"remote_addr"`

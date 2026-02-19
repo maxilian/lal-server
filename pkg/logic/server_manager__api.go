@@ -219,7 +219,7 @@ func (sm *ServerManager) CtrlStartHttpflvPull(info base.ApiCtrlStartHttpflvPullR
 	})
 
 	// Track and run
-	//sid := fmt.Sprintf("httpflv-pull-%d", time.Now().UnixNano())
+	sid := fmt.Sprintf("httpflv-pull-%d", time.Now().UnixNano())
 	sm.httpflvPullers.Store(cps.UniqueKey(), &httpflvPuller{
 		session: ps,
 		app:     app,
@@ -231,8 +231,8 @@ func (sm *ServerManager) CtrlStartHttpflvPull(info base.ApiCtrlStartHttpflvPullR
 	go func() {
 		err := ps.Start(url)
 		// Cleanup when Start returns (error or stop)
-		if _, ok := sm.httpflvPullers.Load(cps.UniqueKey()); ok {
-			sm.httpflvPullers.Delete(cps.UniqueKey())
+		if _, ok := sm.httpflvPullers.Load(sid); ok {
+			sm.httpflvPullers.Delete(sid)
 			//group.DelCustomizePubSession(cps)
 		}
 		_ = err // optionally log
@@ -240,7 +240,7 @@ func (sm *ServerManager) CtrlStartHttpflvPull(info base.ApiCtrlStartHttpflvPullR
 
 	ret.ErrorCode = base.ErrorCodeSucc
 	ret.Desp = base.DespSucc
-	ret.Data.SessionId = cps.UniqueKey()
+	ret.Data.SessionId = sid
 	ret.Data.AppName = app
 	ret.Data.StreamName = stream
 	return ret
@@ -314,8 +314,12 @@ func (sm *ServerManager) CtrlStartWsflvPull(info base.ApiCtrlStartWsflvPullReq) 
 
 	ps := NewWsFlvPullSession(app, stream, group, cps)
 
-	// sid := fmt.Sprintf("wsflv-pull-%d", time.Now().UnixNano())
-	sm.wsflvPullers.Store(cps.UniqueKey(), &wsflvPuller{
+	sid := fmt.Sprintf("wsflv-pull-%d", time.Now().UnixNano())
+
+	cps.SetControlSessionID(sid)
+    cps.SetProtocol("WS-FLV")
+
+	sm.wsflvPullers.Store(sid, &wsflvPuller{
 		session: ps,
 		app:     app,
 		stream:  stream,
@@ -325,54 +329,114 @@ func (sm *ServerManager) CtrlStartWsflvPull(info base.ApiCtrlStartWsflvPullReq) 
 
 	go func() {
 		err := ps.Start(url)
-		if _, ok := sm.wsflvPullers.Load(cps.UniqueKey()); ok {
-			sm.wsflvPullers.Delete(cps.UniqueKey())
-			//group.DelCustomizePubSession(cps)
+		if _, ok := sm.wsflvPullers.Load(sid); ok {
+			sm.wsflvPullers.Delete(sid)
+			group.DelCustomizePubSession(cps)
 		}
 		_ = err
 	}()
 
 	ret.ErrorCode = base.ErrorCodeSucc
 	ret.Desp = base.DespSucc
-	ret.Data.SessionId = cps.UniqueKey()
+	ret.Data.SessionId = sid
 	ret.Data.AppName = app
 	ret.Data.StreamName = stream
 	return ret
 }
 
 func (sm *ServerManager) CtrlStopWsflvPull(req base.ApiCtrlStopWsflvPullReq) base.ApiCtrlStopWsflvPullResp {
-	var ret base.ApiCtrlStopWsflvPullResp
+    var ret base.ApiCtrlStopWsflvPullResp
 
-	sid := req.SessionId
-	if sid == "" {
-		sm.wsflvPullers.Range(func(key, value any) bool {
-			p := value.(*wsflvPuller)
-			if p.app == req.AppName && p.stream == req.StreamName {
-				sid = key.(string)
-				return false
-			}
-			return true
-		})
-		if sid == "" {
-			ret.ErrorCode = base.ErrorCodeSessionNotFound
-			ret.Desp = base.DespSessionNotFound
-			return ret
-		}
-	}
+    resolveExternalSid := func() (string, *wsflvPuller, bool) {
+        // If caller passed EXTERNAL sid directly
+        if v, ok := sm.wsflvPullers.Load(req.SessionId); ok {
+            return req.SessionId, v.(*wsflvPuller), true
+        }
+        // If caller passed INTERNAL id, find the matching entry
+        if req.SessionId != "" {
+            var foundSid string
+            var found *wsflvPuller
+            sm.wsflvPullers.Range(func(key, value any) bool {
+                p := value.(*wsflvPuller)
+                if p.cps != nil && p.cps.UniqueKey() == req.SessionId {
+                    foundSid = key.(string)
+                    found = p
+                    return false
+                }
+                return true
+            })
+            if foundSid != "" {
+                return foundSid, found, true
+            }
+        }
+        // Fallback: search by (app,stream) if provided
+        var foundSid string
+        var found *wsflvPuller
+        sm.wsflvPullers.Range(func(key, value any) bool {
+            p := value.(*wsflvPuller)
+            if p.app == req.AppName && p.stream == req.StreamName {
+                foundSid = key.(string)
+                found = p
+                return false
+            }
+            return true
+        })
+        if foundSid != "" {
+            return foundSid, found, true
+        }
+        return "", nil, false
+    }
 
-	if v, ok := sm.wsflvPullers.Load(sid); ok {
-		p := v.(*wsflvPuller)
-		_ = p.session.Stop()                  // stop upstream pull
-		p.group.DelCustomizePubSession(p.cps) // detach publisher
-		sm.wsflvPullers.Delete(sid)
+    sid, p, ok := resolveExternalSid()
+    if !ok {
+        ret.ErrorCode = base.ErrorCodeSessionNotFound
+        ret.Desp = base.DespSessionNotFound
+        return ret
+    }
 
-		ret.ErrorCode = base.ErrorCodeSucc
-		ret.Desp = base.DespSucc
-		ret.Data.SessionId = sid
-		return ret
-	}
+    _ = p.session.Stop()
+    p.group.DelCustomizePubSession(p.cps)
+    sm.wsflvPullers.Delete(sid)
 
-	ret.ErrorCode = base.ErrorCodeSessionNotFound
-	ret.Desp = base.DespSessionNotFound
-	return ret
+    ret.ErrorCode = base.ErrorCodeSucc
+    ret.Desp = base.DespSucc
+    ret.Data.SessionId = sid // external id
+    return ret
 }
+
+// func (sm *ServerManager) CtrlStopWsflvPull(req base.ApiCtrlStopWsflvPullReq) base.ApiCtrlStopWsflvPullResp {
+// 	var ret base.ApiCtrlStopWsflvPullResp
+
+// 	sid := req.SessionId
+// 	if sid == "" {
+// 		sm.wsflvPullers.Range(func(key, value any) bool {
+// 			p := value.(*wsflvPuller)
+// 			if p.app == req.AppName && p.stream == req.StreamName {
+// 				sid = key.(string)
+// 				return false
+// 			}
+// 			return true
+// 		})
+// 		if sid == "" {
+// 			ret.ErrorCode = base.ErrorCodeSessionNotFound
+// 			ret.Desp = base.DespSessionNotFound
+// 			return ret
+// 		}
+// 	}
+
+// 	if v, ok := sm.wsflvPullers.Load(sid); ok {
+// 		p := v.(*wsflvPuller)
+// 		_ = p.session.Stop()                  // stop upstream pull
+// 		p.group.DelCustomizePubSession(p.cps) // detach publisher
+// 		sm.wsflvPullers.Delete(sid)
+
+// 		ret.ErrorCode = base.ErrorCodeSucc
+// 		ret.Desp = base.DespSucc
+// 		ret.Data.SessionId = sid
+// 		return ret
+// 	}
+
+// 	ret.ErrorCode = base.ErrorCodeSessionNotFound
+// 	ret.Desp = base.DespSessionNotFound
+// 	return ret
+// }
