@@ -57,6 +57,8 @@ func (h *HttpApiServer) RunLoop() error {
 	mux.HandleFunc("/api/stat/group", h.statGroupHandler)
 	mux.HandleFunc("/api/stat/all_group", h.statAllGroupHandler)
 	mux.HandleFunc("/api/stat/lal_info", h.statLalInfoHandler)
+	mux.HandleFunc("/api/stat/get_wsflv_pull_stats", h.statWsflvPull)
+	mux.HandleFunc("/api/stat/get_all_wsflv_pull_stats", h.statAllWsflvPull)
 
 	mux.HandleFunc("/api/ctrl/start_relay_pull", h.ctrlStartRelayPullHandler)
 	mux.HandleFunc("/api/ctrl/stop_relay_pull", h.ctrlStopRelayPullHandler)
@@ -68,6 +70,7 @@ func (h *HttpApiServer) RunLoop() error {
 	mux.HandleFunc("/api/ctrl/kick_session", h.ctrlKickSessionHandler)
 	mux.HandleFunc("/api/ctrl/start_rtp_pub", h.ctrlStartRtpPubHandler)
 	mux.HandleFunc("/api/ctrl/add_ip_blacklist", h.ctrlAddIpBlacklistHandler)
+
 	// 所有没有注册路由的走下面这个处理函数
 	mux.HandleFunc("/", h.notFoundHandler)
 
@@ -362,4 +365,31 @@ func (h *HttpApiServer) ctrlStopWsflvPullHandler(w http.ResponseWriter, r *http.
 	resp := h.sm.CtrlStopWsflvPull(req)
 	//_ = json.NewEncoder(w).Encode(resp)
 	feedback(resp, w)
+}
+
+func (h *HttpApiServer) statWsflvPull(w http.ResponseWriter, r *http.Request) {
+
+	var req struct {
+		AppName    string `json:"app_name"`
+		StreamName string `json:"stream_name"`
+	}
+
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	stats, ok := h.sm.GetWsflvPullStats(req.AppName, req.StreamName)
+
+	if !ok {
+		http.Error(w, "not found", 404)
+		return
+	}
+
+	json.NewEncoder(w).Encode(stats)
+}
+
+func (h *HttpApiServer) statAllWsflvPull(w http.ResponseWriter, r *http.Request) {
+
+	stats := h.sm.GetAllWsflvPullStats()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(stats)
 }

@@ -54,8 +54,7 @@ func (sm *ServerManager) StatGroup(streamName string) *base.StatGroup {
 		return nil
 	}
 	// copy
-	var ret base.StatGroup
-	ret = g.GetStat(math.MaxInt32)
+	ret := g.GetStat(math.MaxInt32)
 	return &ret
 }
 
@@ -416,6 +415,45 @@ func (sm *ServerManager) CtrlStopWsflvPull(req base.ApiCtrlStopWsflvPullReq) bas
 
 	ret.ErrorCode = base.ErrorCodeSucc
 	ret.Desp = base.DespSucc
+	ret.Data.SessionId = sid
 
 	return ret
+}
+
+func (sm *ServerManager) GetWsflvPullStats(app, stream string) (WsFlvPullStats, bool) {
+
+	var result WsFlvPullStats
+	var found bool
+
+	sm.wsflvPullers.Range(func(_, value any) bool {
+
+		p := value.(*wsflvPuller)
+
+		if p.app == app && p.stream == stream {
+
+			result = p.session.GetStats()
+			found = true
+			return false
+		}
+
+		return true
+	})
+
+	return result, found
+}
+
+func (sm *ServerManager) GetAllWsflvPullStats() []WsFlvPullStats {
+
+	var list []WsFlvPullStats
+
+	sm.wsflvPullers.Range(func(_, value any) bool {
+
+		p := value.(*wsflvPuller)
+
+		list = append(list, p.session.GetStats())
+
+		return true
+	})
+
+	return list
 }

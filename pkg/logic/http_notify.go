@@ -149,12 +149,17 @@ func (h *HttpNotify) OnHlsMakeTs(info base.HlsMakeTsInfo) {
 
 // ---------------------------------------------------------------------------------------------------------------------
 
+//	func (h *HttpNotify) RunLoop() {
+//		for {
+//			select {
+//			case t := <-h.taskQueue:
+//				h.post(t.url, t.info)
+//			}
+//		}
+//	}
 func (h *HttpNotify) RunLoop() {
-	for {
-		select {
-		case t := <-h.taskQueue:
-			h.post(t.url, t.info)
-		}
+	for t := range h.taskQueue {
+		h.post(t.url, t.info)
 	}
 }
 

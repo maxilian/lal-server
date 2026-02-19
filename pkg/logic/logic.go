@@ -55,6 +55,8 @@ type ILalServer interface {
 	CtrlStopHttpflvPull(info base.ApiCtrlStopHttpflvPullReq) base.ApiCtrlStopHttpflvPullResp
 	CtrlStartWsflvPull(info base.ApiCtrlStartWsflvPullReq) base.ApiCtrlStartWsflvPullResp
 	CtrlStopWsflvPull(info base.ApiCtrlStopWsflvPullReq) base.ApiCtrlStopWsflvPullResp
+	GetWsflvPullStats(appName string, streamName string) (WsFlvPullStats, bool)
+	GetAllWsflvPullStats() []WsFlvPullStats
 }
 
 // NewLalServer 创建一个lal server

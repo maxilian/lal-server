@@ -171,19 +171,32 @@ import (
 )
 
 type WsFlvPullSession struct {
-	appName    string
-	streamName string
+	appName       string
+	streamName    string
+	url           string
+	conn          *websocket.Conn
+	mu            sync.Mutex
+	parserBuf     bytes.Buffer
+	cps           ICustomizePubSessionContext
+	stopped       atomic.Bool
+	stats         WsFlvPullStats
+	bytesReceived atomic.Uint64
+	startTime     time.Time
+	stopChan      chan struct{}
+	lastStatTime  time.Time
+	lastStatBytes uint64
+}
 
-	url string
+type WsFlvPullStats struct {
+	Url        string    `json:"url"`
+	AppName    string    `json:"app_name"`
+	StreamName string    `json:"stream_name"`
+	StartTime  time.Time `json:"start_time"`
 
-	conn *websocket.Conn
-	mu   sync.Mutex
+	BytesReceived uint64  `json:"bytes_received"`
+	BitrateKbps   float64 `json:"bitrate_kbps"`
 
-	parserBuf bytes.Buffer
-
-	cps ICustomizePubSessionContext
-
-	stopped atomic.Bool
+	LastUpdate time.Time `json:"last_update"`
 }
 
 func NewWsFlvPullSession(
@@ -200,9 +213,48 @@ func NewWsFlvPullSession(
 	}
 }
 
+// func (s *WsFlvPullSession) Start(url string) error {
+
+// 	s.url = url
+
+// 	for !s.stopped.Load() {
+
+// 		err := s.connectAndRead()
+
+// 		if s.stopped.Load() {
+// 			return nil
+// 		}
+
+// 		Log.Warnf("wsflv pull error. stream=%s err=%v",
+// 			s.streamName, err)
+
+// 		time.Sleep(3 * time.Second)
+// 	}
+
+// 	return nil
+// }
+
 func (s *WsFlvPullSession) Start(url string) error {
 
 	s.url = url
+
+	now := time.Now()
+
+	s.startTime = now
+	s.lastStatTime = now
+	s.lastStatBytes = 0
+
+	s.stats = WsFlvPullStats{
+		Url:        url,
+		AppName:    s.appName,
+		StreamName: s.streamName,
+		StartTime:  now,
+		LastUpdate: now,
+	}
+
+	s.stopChan = make(chan struct{})
+
+	go s.updateStatsLoop()
 
 	for !s.stopped.Load() {
 
@@ -221,9 +273,57 @@ func (s *WsFlvPullSession) Start(url string) error {
 	return nil
 }
 
+func (s *WsFlvPullSession) updateStatsLoop() {
+
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+
+		select {
+
+		case <-ticker.C:
+
+			now := time.Now()
+
+			totalBytes := s.bytesReceived.Load()
+
+			duration := now.Sub(s.startTime).Seconds()
+
+			var bitrate float64
+
+			if duration > 0 {
+
+				bytesDiff := totalBytes - s.lastStatBytes
+				timeDiff := now.Sub(s.lastStatTime).Seconds()
+
+				if timeDiff > 0 {
+					bitrate = float64(bytesDiff*8) / timeDiff / 1000
+				}
+			}
+
+			s.mu.Lock()
+
+			s.stats.BytesReceived = totalBytes
+			s.stats.BitrateKbps = bitrate
+			s.stats.LastUpdate = now
+
+			s.mu.Unlock()
+
+			s.lastStatBytes = totalBytes
+			s.lastStatTime = now
+
+		case <-s.stopChan:
+			return
+		}
+	}
+}
+
 func (s *WsFlvPullSession) Stop() {
 
 	if s.stopped.CompareAndSwap(false, true) {
+
+		close(s.stopChan)
 
 		s.mu.Lock()
 
@@ -233,6 +333,24 @@ func (s *WsFlvPullSession) Stop() {
 
 		s.mu.Unlock()
 	}
+}
+
+func (s *WsFlvPullSession) GetStats() WsFlvPullStats {
+
+	stats := s.stats
+
+	stats.BytesReceived = s.bytesReceived.Load()
+
+	duration := time.Since(s.startTime).Seconds()
+
+	if duration > 0 {
+		stats.BitrateKbps =
+			float64(stats.BytesReceived*8) / duration / 1000
+	}
+
+	stats.LastUpdate = time.Now()
+
+	return stats
 }
 
 func (s *WsFlvPullSession) connectAndRead() error {
@@ -270,6 +388,8 @@ func (s *WsFlvPullSession) connectAndRead() error {
 		if err != nil {
 			return err
 		}
+
+		s.bytesReceived.Add(uint64(len(data)))
 
 		s.parserBuf.Write(data)
 
