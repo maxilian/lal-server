@@ -1,11 +1,12 @@
 package base
 
 type ApiCtrlStartWsflvPullReq struct {
-	Url           string `json:"url"`
-	AppName       string `json:"app_name"`
-	StreamName    string `json:"stream_name"`
-	PullTimeoutMs int    `json:"pull_timeout_ms,omitempty"`
-	ReadTimeoutMs int    `json:"read_timeout_ms,omitempty"`
+	Url           string            `json:"url"`
+	AppName       string            `json:"app_name"`
+	StreamName    string            `json:"stream_name"`
+	PullTimeoutMs int               `json:"pull_timeout_ms,omitempty"`
+	ReadTimeoutMs int               `json:"read_timeout_ms,omitempty"`
+	Headers       map[string]string `json:"headers,omitempty"`
 }
 
 type ApiCtrlStopWsflvPullReq struct {

@@ -299,6 +299,7 @@ func (sm *ServerManager) CtrlStartWsflvPull(info base.ApiCtrlStartWsflvPullReq) 
 	app := info.AppName
 	stream := info.StreamName
 	url := info.Url
+	header := info.Headers
 
 	if app == "" || stream == "" || url == "" {
 		ret.ErrorCode = base.ErrorCodeHttpflvInvalidParam
@@ -334,7 +335,8 @@ func (sm *ServerManager) CtrlStartWsflvPull(info base.ApiCtrlStartWsflvPullReq) 
 	})
 
 	go func() {
-		err := ps.Start(url)
+		//insert url to pull, and the request headers if exists
+		err := ps.Start(url, header)
 
 		// cleanup safely
 		sm.mutex.Lock()
