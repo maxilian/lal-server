@@ -166,5 +166,4 @@ func (p *PeriodRecord) Add(unixSec int64, v uint32) {
 		p.ringBuf[index].UnixSec = unixSec
 		p.ringBuf[index].V = v
 	}
-	return
 }

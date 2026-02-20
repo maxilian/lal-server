@@ -114,7 +114,7 @@ func MakeWsFrameHeader(wsHeader WsHeader) (buf []byte) {
 	if wsHeader.Masked {
 		headerSize += 4
 	}
-	buf = make([]byte, headerSize, headerSize)
+	buf = make([]byte, headerSize)
 	if wsHeader.Fin {
 		buf[0] |= 1 << 7
 	}
@@ -133,9 +133,11 @@ func MakeWsFrameHeader(wsHeader WsHeader) (buf []byte) {
 		buf[1] |= 1 << 7
 	}
 	buf[1] |= (uint8(payload) & 0x7F)
-	if payload == 126 {
+
+	switch payload {
+	case 126:
 		bele.BePutUint16(buf[2:], uint16(wsHeader.PayloadLength))
-	} else if payload == 127 {
+	case 127:
 		bele.BePutUint64(buf[2:], wsHeader.PayloadLength)
 	}
 

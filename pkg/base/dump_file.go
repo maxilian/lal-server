@@ -11,12 +11,13 @@ package base
 import (
 	"encoding/hex"
 	"fmt"
-	"github.com/q191201771/naza/pkg/bele"
-	"github.com/q191201771/naza/pkg/nazabytes"
-	"github.com/q191201771/naza/pkg/nazalog"
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/q191201771/naza/pkg/bele"
+	"github.com/q191201771/naza/pkg/nazabytes"
+	"github.com/q191201771/naza/pkg/nazalog"
 )
 
 // TODO(chef): [refactor] move to naza 202208
@@ -78,7 +79,12 @@ func (d *DumpFile) OpenToWrite(filename string) (err error) {
 	if err = os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
-	d.file, err = os.Create(filename)
+
+	f, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	d.file = f
 	return d.WriteWithType([]byte(LalFullInfo), DumpTypeInnerFileHeaderData)
 }
 

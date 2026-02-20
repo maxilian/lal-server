@@ -160,12 +160,7 @@ func (msg RtmpMsg) IsHevcKeySeqHeader() bool {
 }
 
 func (msg RtmpMsg) IsEnhanced() bool {
-	isExtHeader := msg.Payload[0] & 0x80
-	if isExtHeader != 0 {
-		return true
-	}
-
-	return false
+	return msg.Payload[0]&0x80 != 0
 }
 
 func (msg RtmpMsg) IsVideoKeySeqHeader() bool {

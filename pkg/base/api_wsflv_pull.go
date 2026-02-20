@@ -19,9 +19,9 @@ type ApiCtrlStartWsflvPullResp struct {
 	ErrorCode int    `json:"error_code"`
 	Desp      string `json:"desp"`
 	Data      struct {
-		SessionId  string `json:"session_id"`
-		AppName    string `json:"app_name"`
-		StreamName string `json:"stream_name"`
+		SessionId  string `json:"session_id,omitempty"`
+		AppName    string `json:"app_name,omitempty"`
+		StreamName string `json:"stream_name,omitempty"`
 	} `json:"data"`
 }
 

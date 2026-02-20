@@ -272,7 +272,7 @@ func (group *Group) pullIfNeeded() (string, error) {
 		err = <-rtRtspSession.WaitChan()
 		Log.Infof("[%s] relay pull done. err=%v", rtRtspSession.UniqueKey(), err)
 		group.DelRtspPullSession(rtRtspSession)
-		return
+
 	}(group.pullProxy.pullUrl, isPullByRtmp, rtmpSession, rtspSession)
 
 	return uk, nil
