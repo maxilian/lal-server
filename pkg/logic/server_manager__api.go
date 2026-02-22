@@ -433,7 +433,7 @@ func (sm *ServerManager) GetWsflvPullStats(app, stream string) (WsFlvPullStats, 
 
 		if p.app == app && p.stream == stream {
 
-			result = p.session.GetStats()
+			result = p.session.GetStats(sm.getGroup(app, stream))
 			found = true
 			return false
 		}
@@ -452,7 +452,7 @@ func (sm *ServerManager) GetAllWsflvPullStats() []WsFlvPullStats {
 
 		p := value.(*wsflvPuller)
 
-		list = append(list, p.session.GetStats())
+		list = append(list, p.session.GetStats(sm.getGroup(p.app, p.stream)))
 
 		return true
 	})

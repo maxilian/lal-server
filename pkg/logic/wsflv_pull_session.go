@@ -10,6 +10,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/q191201771/lal/pkg/base"
 	"github.com/q191201771/lal/pkg/httpflv"
 	"github.com/q191201771/lal/pkg/remux"
 )
@@ -41,15 +42,11 @@ type WsFlvPullStats struct {
 	BytesReceived uint64  `json:"bytes_received"`
 	BitrateKbps   float64 `json:"bitrate_kbps"`
 
-	LastUpdate time.Time `json:"last_update"`
+	LastUpdate time.Time      `json:"last_update"`
+	Subs       []base.StatSub `json:"subs"`
 }
 
-func NewWsFlvPullSession(
-	appName string,
-	streamName string,
-	group *Group,
-	cps ICustomizePubSessionContext,
-) *WsFlvPullSession {
+func NewWsFlvPullSession(appName string, streamName string, group *Group, cps ICustomizePubSessionContext) *WsFlvPullSession {
 
 	return &WsFlvPullSession{
 		appName:    appName,
@@ -166,24 +163,6 @@ func (s *WsFlvPullSession) Stop() {
 	}
 }
 
-func (s *WsFlvPullSession) GetStats() WsFlvPullStats {
-
-	stats := s.stats
-
-	stats.BytesReceived = s.bytesReceived.Load()
-
-	duration := time.Since(s.startTime).Seconds()
-
-	if duration > 0 {
-		stats.BitrateKbps =
-			float64(stats.BytesReceived*8) / duration / 1000
-	}
-
-	stats.LastUpdate = time.Now()
-
-	return stats
-}
-
 func (s *WsFlvPullSession) connectAndRead() error {
 
 	dialer := websocket.DefaultDialer
@@ -279,4 +258,27 @@ func (s *WsFlvPullSession) connectAndRead() error {
 			s.parserBuf.Next(consumed)
 		}
 	}
+}
+
+func (s *WsFlvPullSession) GetStats(group *Group) WsFlvPullStats {
+
+	stats := s.stats
+
+	stats.BytesReceived = s.bytesReceived.Load()
+
+	duration := time.Since(s.startTime).Seconds()
+
+	if duration > 0 {
+		stats.BitrateKbps =
+			float64(stats.BytesReceived*8) / duration / 1000
+	}
+
+	stats.LastUpdate = time.Now()
+
+	if group != nil {
+		statGroup := group.GetStat(1000)
+		stats.Subs = statGroup.StatSubs
+	}
+
+	return stats
 }

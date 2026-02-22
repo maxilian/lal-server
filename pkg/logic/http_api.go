@@ -57,8 +57,8 @@ func (h *HttpApiServer) RunLoop() error {
 	mux.HandleFunc("/api/stat/group", h.statGroupHandler)
 	mux.HandleFunc("/api/stat/all_group", h.statAllGroupHandler)
 	mux.HandleFunc("/api/stat/lal_info", h.statLalInfoHandler)
-	mux.HandleFunc("/api/stat/get_wsflv_pull_stats", h.statWsflvPull)
-	mux.HandleFunc("/api/stat/get_all_wsflv_pull_stats", h.statAllWsflvPull)
+	mux.HandleFunc("/api/stat/get_wsflv_pull", h.statWsflvPull)
+	mux.HandleFunc("/api/stat/get_all_wsflv_pull", h.statAllWsflvPull)
 
 	mux.HandleFunc("/api/ctrl/start_relay_pull", h.ctrlStartRelayPullHandler)
 	mux.HandleFunc("/api/ctrl/stop_relay_pull", h.ctrlStopRelayPullHandler)
@@ -278,7 +278,7 @@ func (h *HttpApiServer) notFoundHandler(w http.ResponseWriter, req *http.Request
 
 // ---------------------------------------------------------------------------------------------------------------------
 
-func feedback(v interface{}, w http.ResponseWriter) {
+func feedback(v any, w http.ResponseWriter) {
 	resp, _ := json.Marshal(v)
 	w.Header().Add("Server", base.LalHttpApiServer)
 	base.AddCorsHeaders(w)

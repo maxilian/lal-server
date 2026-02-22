@@ -307,17 +307,14 @@ func (session *ClientCommandSession) runReadLoop() {
 	}
 
 	// not over tcp
-	for {
-		select {
-		case <-t.C:
-			session.cseq++
-			if _, err := session.writeCmdReadResp(MethodGetParameter, session.urlCtx.RawUrlWithoutUserInfo, nil, ""); err != nil {
-				loopErr = err
-				return
-			}
+	for range t.C {
+		session.cseq++
+		if _, err := session.writeCmdReadResp(MethodGetParameter, session.urlCtx.RawUrlWithoutUserInfo, nil, ""); err != nil {
+			loopErr = err
+			return
 		}
-
 	}
+
 }
 
 func (session *ClientCommandSession) connect(rawUrl string) (err error) {

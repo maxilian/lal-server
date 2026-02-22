@@ -121,7 +121,8 @@ func (session *BasicHttpSubSession) RawQuery() string {
 // ----- ISessionStat --------------------------------------------------------------------------------------------------
 
 func (session *BasicHttpSubSession) GetStat() StatSession {
-	return session.sessionStat.GetStat()
+	//return session.sessionStat.GetStat()
+	return session.sessionStat.GetStatWithConn(session.conn)
 }
 
 func (session *BasicHttpSubSession) UpdateStat(intervalSec uint32) {
