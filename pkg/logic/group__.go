@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/q191201771/lal/pkg/gb28181"
+	"github.com/q191201771/lal/pkg/metrics"
 
 	"github.com/q191201771/lal/pkg/base"
 	"github.com/q191201771/lal/pkg/hls"
@@ -256,6 +257,11 @@ func (group *Group) Dispose() {
 	group.httptsSubSessionSet = nil
 
 	group.delIn()
+
+	// --- Reset gauges when group is disposed --- //
+	metrics.PubBitrate.WithLabelValues(group.appName, group.streamName).Set(0)
+	metrics.SubBitrate.WithLabelValues(group.appName, group.streamName).Set(0)
+	metrics.SubCount.WithLabelValues(group.appName, group.streamName).Set(0)
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -507,33 +513,97 @@ func (group *Group) disposeInactiveSessions(tickCount uint32) {
 	}
 }
 
-// updateAllSessionStat 更新所有session的状态
+// updateAllSessionStat 更新所有session的状态并推送Prometheus指标
 func (group *Group) updateAllSessionStat() {
+	// --- Publishers ---
 	if group.rtmpPubSession != nil {
 		group.rtmpPubSession.UpdateStat(calcSessionStatIntervalSec)
+		statPub := base.Session2StatPub(group.rtmpPubSession)
+
+		metrics.PubBytes.WithLabelValues(group.appName, group.streamName).
+			Set(float64(statPub.ReadBytesSum))
+		metrics.PubBitrate.WithLabelValues(group.appName, group.streamName).
+			Set(float64(statPub.BitrateKbits))
 	}
+
 	if group.rtspPubSession != nil {
 		group.rtspPubSession.UpdateStat(calcSessionStatIntervalSec)
+		statPub := base.Session2StatPub(group.rtspPubSession)
+
+		metrics.PubBytes.WithLabelValues(group.appName, group.streamName).
+			Set(float64(statPub.ReadBytesSum))
+		metrics.PubBitrate.WithLabelValues(group.appName, group.streamName).
+			Set(float64(statPub.BitrateKbits))
 	}
+
 	if group.psPubSession != nil {
 		group.psPubSession.UpdateStat(calcSessionStatIntervalSec)
+		statPub := base.Session2StatPub(group.psPubSession)
+
+		metrics.PubBytes.WithLabelValues(group.appName, group.streamName).
+			Set(float64(statPub.ReadBytesSum))
+		metrics.PubBitrate.WithLabelValues(group.appName, group.streamName).
+			Set(float64(statPub.BitrateKbits))
 	}
 
+	// --- Pull sessions ---
 	group.updatePullSessionStat()
 
+	// --- Subscribers ---
 	for session := range group.rtmpSubSessionSet {
 		session.UpdateStat(calcSessionStatIntervalSec)
-	}
-	for session := range group.httpflvSubSessionSet {
-		session.UpdateStat(calcSessionStatIntervalSec)
-	}
-	for session := range group.httptsSubSessionSet {
-		session.UpdateStat(calcSessionStatIntervalSec)
-	}
-	for session := range group.rtspSubSessionSet {
-		session.UpdateStat(calcSessionStatIntervalSec)
+		statSub := base.Session2StatSub(session)
+
+		metrics.SubBytes.WithLabelValues(group.appName, group.streamName).
+			Set(float64(statSub.WroteBytesSum))
+		metrics.SubBitrate.WithLabelValues(group.appName, group.streamName).
+			Set(float64(statSub.WriteBitrateKbits))
 	}
 
+	for session := range group.httpflvSubSessionSet {
+		session.UpdateStat(calcSessionStatIntervalSec)
+		statSub := base.Session2StatSub(session)
+
+		metrics.SubBytes.WithLabelValues(group.appName, group.streamName).
+			Set(float64(statSub.WroteBytesSum))
+		metrics.SubBitrate.WithLabelValues(group.appName, group.streamName).
+			Set(float64(statSub.WriteBitrateKbits))
+	}
+
+	for session := range group.httptsSubSessionSet {
+		session.UpdateStat(calcSessionStatIntervalSec)
+		statSub := base.Session2StatSub(session)
+
+		metrics.SubBytes.WithLabelValues(group.appName, group.streamName).
+			Set(float64(statSub.WroteBytesSum))
+		metrics.SubBitrate.WithLabelValues(group.appName, group.streamName).
+			Set(float64(statSub.WriteBitrateKbits))
+	}
+
+	for session := range group.rtspSubSessionSet {
+		session.UpdateStat(calcSessionStatIntervalSec)
+		statSub := base.Session2StatSub(session)
+
+		metrics.SubBytes.WithLabelValues(group.appName, group.streamName).
+			Set(float64(statSub.WroteBytesSum))
+		metrics.SubBitrate.WithLabelValues(group.appName, group.streamName).
+			Set(float64(statSub.WriteBitrateKbits))
+	}
+
+	// --- Subscriber count (clean len() approach) ---
+	subCount := len(group.rtmpSubSessionSet) +
+		len(group.httpflvSubSessionSet) +
+		len(group.httptsSubSessionSet) +
+		len(group.rtspSubSessionSet)
+
+	metrics.SubCount.WithLabelValues(group.appName, group.streamName).
+		Set(float64(subCount))
+
+	if subCount == 0 {
+		// Reset gauges when no subs
+		metrics.SubBitrate.WithLabelValues(group.appName, group.streamName).Set(0)
+	}
+	// --- Push proxies ---
 	for _, item := range group.url2PushProxy {
 		session := item.pushSession
 		if item.isPushing && session != nil {

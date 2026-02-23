@@ -11,10 +11,12 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/q191201771/naza/pkg/nazalog"
 	"os"
 
+	"github.com/q191201771/naza/pkg/nazalog"
+
 	"github.com/q191201771/lal/pkg/base"
+	"github.com/q191201771/lal/pkg/metrics"
 
 	"github.com/q191201771/lal/pkg/logic"
 	"github.com/q191201771/naza/pkg/bininfo"
@@ -22,6 +24,7 @@ import (
 
 func main() {
 	defer nazalog.Sync()
+	metrics.Init()
 
 	confFilename := parseFlag()
 	lals := logic.NewLalServer(func(option *logic.Option) {

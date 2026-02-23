@@ -4,13 +4,14 @@ import (
 	"net/http"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 var (
-	// Publisher metrics
-	PubBytes = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
+	// Gauges for live state
+	PubBytes = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
 			Name: "lal_pub_bytes_total",
 			Help: "Total bytes read from publishers",
 		},
@@ -25,9 +26,8 @@ var (
 		[]string{"app", "stream"},
 	)
 
-	// Subscriber metrics
-	SubBytes = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
+	SubBytes = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
 			Name: "lal_sub_bytes_total",
 			Help: "Total bytes written to subscribers",
 		},
@@ -50,17 +50,20 @@ var (
 		[]string{"app", "stream"},
 	)
 
-	PubCount = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "lal_publishers",
-			Help: "Number of active publishers",
+	// Counter for events
+	KickCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "lal_kick_session_total",
+			Help: "Number of sessions kicked",
 		},
-		[]string{"app", "stream"},
+		[]string{"app", "stream", "session"},
 	)
 )
 
 func Init() {
-	prometheus.MustRegister(PubBytes, PubBitrate, SubBytes, SubBitrate, SubCount, PubCount)
+	prometheus.Unregister(collectors.NewGoCollector())
+	prometheus.Unregister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	prometheus.MustRegister(PubBytes, PubBitrate, SubBytes, SubBitrate, SubCount, KickCount)
 }
 
 func Handler() http.Handler {

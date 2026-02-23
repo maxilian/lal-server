@@ -22,6 +22,7 @@ import (
 	"github.com/q191201771/naza/pkg/nazahttp"
 
 	"github.com/q191201771/lal/pkg/base"
+	"github.com/q191201771/lal/pkg/metrics"
 )
 
 //go:embed http_an__lal.html
@@ -71,6 +72,7 @@ func (h *HttpApiServer) RunLoop() error {
 	mux.HandleFunc("/api/ctrl/start_rtp_pub", h.ctrlStartRtpPubHandler)
 	mux.HandleFunc("/api/ctrl/add_ip_blacklist", h.ctrlAddIpBlacklistHandler)
 
+	mux.Handle("/metrics", metrics.Handler())
 	// 所有没有注册路由的走下面这个处理函数
 	mux.HandleFunc("/", h.notFoundHandler)
 
