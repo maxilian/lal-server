@@ -11,9 +11,9 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/q191201771/lal/pkg/base"
+	howen "github.com/q191201771/lal/pkg/howen264"
 	"github.com/q191201771/lal/pkg/httpflv"
 	"github.com/q191201771/lal/pkg/remux"
-	howen "github.com/q191201771/lal/pkg/howen264"
 )
 
 type WsFlvPullSession struct {
@@ -33,12 +33,10 @@ type WsFlvPullSession struct {
 	lastStatTime  time.Time
 	lastStatBytes uint64
 
-
-	howenEnabled     bool
-	howenFrames      bool
-	howenJSON        string
-	remuxer          *howen.AVCRemuxer
-
+	howenEnabled bool
+	howenFrames  bool
+	howenJSON    string
+	remuxer      *howen.AVCRemuxer
 }
 
 type WsFlvPullStats struct {
@@ -75,11 +73,17 @@ func (s *WsFlvPullSession) Start(url string, wsHeaders map[string]string) error 
 	s.url = url
 
 	if v := wsHeaders["X-Howen-Mode"]; v != "" {
-		if v == "1"         { s.howenEnabled = true }
-		if v == "frames"    { s.howenEnabled, s.howenFrames = true, true }
+		if v == "1" {
+			s.howenEnabled = true
+		}
+		if v == "frames" {
+			s.howenEnabled, s.howenFrames = true, true
+		}
 	}
 	if j := wsHeaders["X-Howen-Json"]; j != "" {
 		s.howenJSON = j
+
+		//fmt.Println(j)
 	}
 
 	now := time.Now()
@@ -102,13 +106,12 @@ func (s *WsFlvPullSession) Start(url string, wsHeaders map[string]string) error 
 
 	for !s.stopped.Load() {
 
-
 		var err error
 
 		if s.howenFrames {
-			err = s.connectAndReadHowen()  
+			err = s.connectAndReadHowen()
 		} else {
-			err = s.connectAndRead() 
+			err = s.connectAndRead()
 		}
 
 		//err := s.connectAndRead()
@@ -309,81 +312,109 @@ func (s *WsFlvPullSession) GetStats(group *Group) WsFlvPullStats {
 }
 
 func (s *WsFlvPullSession) connectAndReadHowen() error {
-    dialer := websocket.DefaultDialer
-    conn, _, err := dialer.Dial(s.url, s.wsHeaders)
-    if err != nil {
-        return err
-    }
-    Log.Infof("howen ws connected. stream=%s url=%s", s.streamName, s.url)
+	dialer := websocket.DefaultDialer
+	conn, _, err := dialer.Dial(s.url, s.wsHeaders)
+	if err != nil {
+		return err
+	}
+	Log.Infof("howen ws connected. stream=%s url=%s", s.streamName, s.url)
 
-    s.mu.Lock()
-    s.conn = conn
-    s.mu.Unlock()
-    defer func() {
-        s.mu.Lock(); if s.conn != nil { s.conn.Close(); s.conn = nil }; s.mu.Unlock()
-    }()
+	s.mu.Lock()
+	s.conn = conn
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		if s.conn != nil {
+			s.conn.Close()
+			s.conn = nil
+		}
+		s.mu.Unlock()
+	}()
 
-    s.remuxer = howen.NewAVCRemuxer()
+	s.remuxer = howen.NewAVCRemuxer()
 
-    // Send Howen control json (action=2) if requested
-    if s.howenEnabled && s.howenJSON != "" {
-        payload := howen.BuildHowenControlEnvelope([]byte(s.howenJSON))
-        if err := conn.WriteMessage(websocket.BinaryMessage, payload); err != nil {
-            Log.Errorf("send Howen control payload failed: %v", err)
-            return err
-        }
-        Log.Infof("Howen control payload sent. stream=%s", s.streamName)
-    }
+	// Send Howen control json (action=2) if requested
+	if s.howenEnabled && s.howenJSON != "" {
+		payload := howen.BuildHowenControlEnvelope([]byte(s.howenJSON))
+		if err := conn.WriteMessage(websocket.BinaryMessage, payload); err != nil {
+			Log.Errorf("send Howen control payload failed: %v", err)
+			return err
+		}
+		Log.Infof("Howen control payload sent. stream=%s", s.streamName)
+	}
 
-    for {
-        _, data, err := conn.ReadMessage()
-        if err != nil {
-            return err
-        }
-        s.bytesReceived.Add(uint64(len(data)))
+	for {
+		_, data, err := conn.ReadMessage()
+		if err != nil {
+			return err
+		}
+		s.bytesReceived.Add(uint64(len(data)))
 
-        action, payload, ok := howen.ParseHowenEnvelope(data)
-        if !ok {
-            continue
-        }
+		action, payload, ok := howen.ParseHowenEnvelope(data)
+		if !ok {
+			continue
+		}
 
-        switch action {
-        case howen.ActionJSON:
-            // optional: parse zero-terminated json ack if you want (not required)
-            continue
+		switch action {
+		case howen.ActionJSON:
+			// optional: parse zero-terminated json ack if you want (not required)
+			continue
 
-        case howen.ActionMedia:
-            ft, ts, frame, ok := howen.ParseHowenMedia(payload)
-            if !ok {
-                continue
-            }
-            // Video only for now (H.264)
-            if ft == howen.FrameI || ft == howen.FrameP {
-                tags, err := s.remuxer.RemuxH264(ts, frame, ft == howen.FrameI)
-                if err != nil {
-                    return err
-                }
-                for _, t := range tags {
-                    if err := s.feedOneFlvTag(t); err != nil {
-                        return err
-                    }
-                }
-            }
-            // else if ft == howen.FrameAudio { /* wire audio later */ }
+		case howen.ActionMedia:
+			ft, ts, frame, ok := howen.ParseHowenMedia(payload)
+			if !ok {
+				continue
+			}
+			// Video only for now (H.264)
+			if ft == howen.FrameI || ft == howen.FrameP {
+				tags, err := s.remuxer.RemuxH264(ts, frame, ft == howen.FrameI)
+				if err != nil {
+					return err
+				}
+				for _, t := range tags {
+					if err := s.feedOneFlvTag(t); err != nil {
+						return err
+					}
+				}
+			}
+			// else if ft == howen.FrameAudio { /* wire audio later */ }
 
-        default:
-            // ignore
-        }
-    }
+		default:
+			// ignore
+		}
+	}
 }
 
 // helper: parse a single FLV tag (with PrevTagSize) and feed RTMP
+// func (s *WsFlvPullSession) feedOneFlvTag(b []byte) error {
+// 	reader := bytes.NewReader(b)
+// 	tag, err := httpflv.ReadTag(reader)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	rtmpMsg := remux.FlvTag2RtmpMsg(tag)
+// 	return s.cps.FeedRtmpMsg(rtmpMsg)
+// }
+
 func (s *WsFlvPullSession) feedOneFlvTag(b []byte) error {
-    reader := bytes.NewReader(b)
-    tag, err := httpflv.ReadTag(reader)
-    if err != nil {
-        return err
-    }
-    rtmpMsg := remux.FlvTag2RtmpMsg(tag)
-    return s.cps.FeedRtmpMsg(rtmpMsg)
+	reader := bytes.NewReader(b)
+	tag, err := httpflv.ReadTag(reader)
+	if err != nil {
+		//Log.Warnf("feedOneFlvTag: failed to parse FLV tag, err=%v", err)
+		return err
+	}
+
+	//Log.Infof("feedOneFlvTag: parsed tag type=%d, dataSize=%d, ts=%d", tag.Header.Type, tag.Header.DataSize, tag.Header.Timestamp)
+
+	rtmpMsg := remux.FlvTag2RtmpMsg(tag)
+	//Log.Infof("feedOneFlvTag: converted to RTMP msg type=%d, ts=%d, payload=%d bytes", rtmpMsg.Header.MsgTypeId, rtmpMsg.Header.TimestampAbs, len(rtmpMsg.Payload))
+
+	err = s.cps.FeedRtmpMsg(rtmpMsg)
+	if err != nil {
+		//Log.Warnf("feedOneFlvTag: FeedRtmpMsg failed: %v", err)
+		return err
+	}
+
+	//Log.Infof("feedOneFlvTag: RTMP msg successfully fed into publisher")
+	return nil
 }
