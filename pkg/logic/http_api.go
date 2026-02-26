@@ -385,13 +385,17 @@ func (h *HttpApiServer) statWsflvPull(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	json.NewEncoder(w).Encode(stats)
+	//json.NewEncoder(w).Encode(stats)
+	feedback(stats, w)
+
 }
 
 func (h *HttpApiServer) statAllWsflvPull(w http.ResponseWriter, r *http.Request) {
 
 	stats := h.sm.GetAllWsflvPullStats()
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(stats)
+	//w.Header().Set("Content-Type", "application/json")
+	//json.NewEncoder(w).Encode(stats)
+
+	feedback(stats, w)
 }

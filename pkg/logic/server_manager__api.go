@@ -336,7 +336,7 @@ func (sm *ServerManager) CtrlStartWsflvPull(info base.ApiCtrlStartWsflvPullReq) 
 
 	go func() {
 		//insert url to pull, and the request headers if exists
-		err := ps.Start(url, header)
+		err := ps.Start(url, header, sm.config.WsFlvPullConfig)
 
 		// cleanup safely
 		sm.mutex.Lock()
