@@ -7,6 +7,12 @@ RUN go build -o lalserver ./app/lalserver/main.go
 
 # Output
 FROM debian:bookworm-slim
+
+
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && update-ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 EXPOSE 1935 8080 4433 5544 8083 8084 30000-30100/udp
 
