@@ -14,7 +14,15 @@ import (
 	howen "github.com/q191201771/lal/pkg/howen264"
 	"github.com/q191201771/lal/pkg/httpflv"
 	"github.com/q191201771/lal/pkg/remux"
+
+    "github.com/q191201771/lal/pkg/aac"
+
 )
+
+
+type audioState struct {
+    sentAACSeq bool
+}
 
 type WsFlvPullSession struct {
 	appName       string
@@ -37,6 +45,7 @@ type WsFlvPullSession struct {
 	howenFrames  bool
 	howenJSON    string
 	remuxer      *howen.AVCRemuxer
+	aud audioState
 }
 
 type WsFlvPullStats struct {
@@ -385,6 +394,86 @@ func (s *WsFlvPullSession) connectAndReadHowen() error {
 					}
 				}
 			}
+
+			switch ft { 
+			case howen.FrameI, howen.FrameP:
+				tags, err := s.remuxer.RemuxH264(ts, frame, ft == howen.FrameI)
+				if err != nil {
+					return err
+				}
+				for _, t := range tags {
+					if err := s.feedOneFlvTag(t); err != nil {
+						return err
+					}
+				}
+			case howen.FrameAudio:
+				if len(frame) == 0 {
+					continue
+				}
+
+				// We handle AAC with ADTS. If frame contains multiple ADTS frames concatenated, loop them.
+				buf := frame
+				for {
+					if len(buf) < aac.AdtsHeaderLength {
+						break
+					}
+					// ADTS sync check: 0xFFF
+					if !(buf[0] == 0xFF && (buf[1]&0xF0) == 0xF0) {
+						// Not ADTS. If your stream is raw AAC (no ADTS) + ASC from metadata,
+						// handle that in a separate branch (see notes below).
+						Log.Warnf("Howen audio: not ADTS AAC, len=%d, head=%02X %02X", len(buf), buf[0], buf[1])
+						break
+					}
+
+					// Parse ADTS header (7 bytes)
+					hdr, err := aac.NewAdtsHeaderContext(buf[:aac.AdtsHeaderLength])
+					if err != nil {
+						Log.Warnf("Howen audio: ADTS header parse failed: %v", err)
+						break
+					}
+					adtsLen := int(hdr.AdtsLength) // includes 7-byte header
+					if adtsLen <= aac.AdtsHeaderLength || adtsLen > len(buf) {
+						Log.Warnf("Howen audio: invalid ADTS length: %d (buf=%d)", adtsLen, len(buf))
+						break
+					}
+
+					// 1) Send AAC Sequence Header once
+					if !s.aud.sentAACSeq {
+						seqPayload, err := aac.MakeAudioDataSeqHeaderWithAdtsHeader(buf[:aac.AdtsHeaderLength])
+						if err != nil {
+							Log.Warnf("Howen audio: make AAC seq header failed: %v", err)
+							// Can't continue without ASC for flv.js
+							break
+						}
+						// Build complete FLV audio tag (type=8)
+						seqTag := packFlvTag(8, ts, seqPayload)
+						if err := s.feedOneFlvTag(seqTag); err != nil {
+							return err
+						}
+						s.aud.sentAACSeq = true
+					}
+
+					// 2) Send AAC raw frame (strip ADTS header)
+					raw := buf[aac.AdtsHeaderLength:adtsLen]
+					// AAC raw FLV payload: 0xAF 0x01 + raw
+					payload := make([]byte, 2+len(raw))
+					payload[0] = 0xAF // SoundFormat=10(AAC), SoundRate=3, SoundSize=1, SoundType=1 (canonical for AAC in FLV)
+					payload[1] = 0x01 // AACPacketType = 1 (raw)
+					copy(payload[2:], raw)
+
+					rawTag := packFlvTag(8, ts, payload)
+					if err := s.feedOneFlvTag(rawTag); err != nil {
+						return err
+					}
+
+					// Advance if multiple ADTS frames are packed
+					buf = buf[adtsLen:]
+					if len(buf) < aac.AdtsHeaderLength {
+						break
+					}
+				}
+
+			}
 			// else if ft == howen.FrameAudio { /* wire audio later */ }
 
 		default:
@@ -425,4 +514,33 @@ func (s *WsFlvPullSession) feedOneFlvTag(b []byte) error {
 
 	//Log.Infof("feedOneFlvTag: RTMP msg successfully fed into publisher")
 	return nil
+}
+
+// packFlvTag builds a full FLV tag with given type (8=audio, 9=video), timestamp (ms), and payload.
+// Payload for audio must already start with the FLV audio header byte(s), e.g. 0xAF 0x00 + ASC, or 0xAF 0x01 + raw.
+func packFlvTag(tagType byte, ts uint32, payload []byte) []byte {
+    dataSize := len(payload)
+    tag := make([]byte, 11+dataSize+4)
+
+    // Tag header
+    tag[0] = tagType
+    tag[1] = byte((dataSize >> 16) & 0xFF)
+    tag[2] = byte((dataSize >> 8) & 0xFF)
+    tag[3] = byte(dataSize & 0xFF)
+    tag[4] = byte((ts >> 16) & 0xFF)
+    tag[5] = byte((ts >> 8) & 0xFF)
+    tag[6] = byte(ts & 0xFF)
+    tag[7] = byte((ts >> 24) & 0xFF)
+    // tag[8..10] = 0 (StreamID)
+
+    copy(tag[11:], payload)
+
+    prev := 11 + dataSize
+    off := 11 + dataSize
+    tag[off+0] = byte((prev >> 24) & 0xFF)
+    tag[off+1] = byte((prev >> 16) & 0xFF)
+    tag[off+2] = byte((prev >> 8) & 0xFF)
+    tag[off+3] = byte(prev & 0xFF)
+
+    return tag
 }
