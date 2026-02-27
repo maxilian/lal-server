@@ -402,78 +402,53 @@ func (s *WsFlvPullSession) connectAndReadHowen() error {
 						return err
 					}
 				}
+						
 			case howen.FrameAudio:
-				if len(frame) < 2 {
-					break
-				}
-				codec := frame[0]
-				aacType := frame[1]
-				payload := frame[2:]
+				if len(frame) < 2 { break }
+
+				codec   := frame[0]     // 0x00 == AAC in your mapping
+				aacType := frame[1]     // 0x00 == ASC, 0x01 == raw
+				data    := frame[2:]
 
 				if codec != 0x00 {
-					// Not AAC (e.g., G.711/ADPCM). flv.js won't play—ignore for now.
+					// Not AAC (e.g., G.711/ADPCM) — flv.js can’t play it; ignore or transcode upstream
 					break
-				}
-
-				// helper to push an FLV audio tag (type=8) downstream
-				pushAudio := func(p []byte) error {
-					return s.feedOneFlvTag(packFlvTag(8, ts, p))
-				}
-
-				// Ensure we have sent AAC-LC ASC once (synthetic, ignore device ASC)
-				ensureSeqHeader := func() error {
-					if s.aud.sentAACSeq {
-						return nil
-					}
-					if len(s.aud.asc) == 0 {
-						if idx, ok := aacSamplingIdx(forcedSampleHz); ok && (forcedChannels == 1 || forcedChannels == 2) {
-							s.aud.asc = (&aac.AscContext{
-								AudioObjectType:        2,               // AAC-LC (mp4a.40.2)
-								SamplingFrequencyIndex: idx,             // from forcedSampleHz
-								ChannelConfiguration:   uint8(forcedChannels),
-							}).Pack()
-						} else {
-							// fallback to 16000/mono
-							s.aud.asc = (&aac.AscContext{
-								AudioObjectType:        2,
-								SamplingFrequencyIndex: 8,
-								ChannelConfiguration:   1,
-							}).Pack()
-						}
-					}
-					// FLV AAC seq header: 0xAF 0x00 + ASC (AAC always SoundRate=3/Type=stereo in header; ignored by decoders)
-					seq := make([]byte, 2+len(s.aud.asc))
-					seq[0] = 0xAF
-					seq[1] = 0x00 // AACPacketType=0 (sequence header)
-					copy(seq[2:], s.aud.asc)
-					if err := pushAudio(seq); err != nil {
-						return err
-					}
-					s.aud.sentAACSeq = true
-					return nil
 				}
 
 				switch aacType {
 				case 0x00:
-					// Device ASC present, but we IGNORE it for now to avoid mp4a.40.5; stick to our AAC-LC ASC.
-					if err := ensureSeqHeader(); err != nil {
-						return err
+					// Device-provided ASC; store and send once
+					s.aud.asc = append([]byte(nil), data...)
+
+					// Derive channel count from ASC (AudioSpecificConfig: 5+4 bits for sfIndex, 4 bits for channels)
+					if len(data) >= 2 {
+						ch := int((data[1] & 0x78) >> 3) // upper 4 bits of second byte
+						if ch == 1 || ch == 2 {
+							s.aud.ch = ch
+						} else {
+							s.aud.ch = 1 // fallback mono if exotic (keeps header consistent)
+						}
+					} else {
+						s.aud.ch = 1
 					}
+
+					if !s.aud.sentAACSeq {
+						if err := s.pushAACSeq(ts); err != nil { return err }
+						s.aud.sentAACSeq = true
+					}
+
 				case 0x01:
-					// Raw AAC frames: make sure ASC was sent
-					if err := ensureSeqHeader(); err != nil {
-						return err
+					// Raw AAC; ensure we sent an ASC first
+					if !s.aud.sentAACSeq {
+						// If device never sent ASC and you must synthesize:
+						// build AAC-LC ASC at a safer rate (e.g., 16000 Hz) and set s.aud.ch=1/2 to match your encoder
+						// But only do this if you also re-encode or know frames are LC @ that rate.
+						// (Best is always: use device ASC.)
+						return nil
 					}
-					raw := make([]byte, 2+len(payload))
-					raw[0] = 0xAF
-					raw[1] = 0x01 // AACPacketType=1 (raw)
-					copy(raw[2:], payload)
-					if err := pushAudio(raw); err != nil {
-						return err
-					}
-				default:
-					// Unknown subtype, ignore
+					if err := s.pushAACRaw(ts, data); err != nil { return err }
 				}
+
 
 			}
 			// else if ft == howen.FrameAudio { /* wire audio later */ }
@@ -525,6 +500,7 @@ const forcedChannels = 1     // 1 = mono, 2 = stereo
 type audioState struct {
     sentAACSeq bool
     asc        []byte
+    ch         int
 }
 
 // Map Hz -> MPEG-4 ASC sampling index
@@ -569,4 +545,29 @@ func packFlvTag(tagType byte, ts uint32, payload []byte) []byte {
     tag[off+2] = byte((prev >> 8) & 0xFF)
     tag[off+3] = byte(prev & 0xFF)
     return tag
+}
+
+
+func (s *WsFlvPullSession) makeAudioHdrByte(ch int) byte {
+    // SoundFormat=10 (AAC) | SoundRate (ignored for AAC) | SoundSize=1 | SoundType=(ch==2?1:0)
+    if ch == 2 { return 0xAF } // stereo
+    return 0xAE                 // mono
+}
+
+func (s *WsFlvPullSession) pushAACSeq(ts uint32) error {
+    b0 := s.makeAudioHdrByte(s.aud.ch)
+    payload := make([]byte, 2+len(s.aud.asc))
+    payload[0] = b0
+    payload[1] = 0x00 // AACPacketType=0 (sequence header)
+    copy(payload[2:], s.aud.asc)
+    return s.feedOneFlvTag(packFlvTag(8, ts, payload))
+}
+
+func (s *WsFlvPullSession) pushAACRaw(ts uint32, frame []byte) error {
+    b0 := s.makeAudioHdrByte(s.aud.ch)
+    payload := make([]byte, 2+len(frame))
+    payload[0] = b0
+    payload[1] = 0x01 // AACPacketType=1 (raw)
+    copy(payload[2:], frame)
+    return s.feedOneFlvTag(packFlvTag(8, ts, payload))
 }
