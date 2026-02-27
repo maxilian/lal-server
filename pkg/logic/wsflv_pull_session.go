@@ -406,53 +406,46 @@ func (s *WsFlvPullSession) connectAndReadHowen() error {
 				if len(frame) < 2 {
 					break
 				}
-
 				codec := frame[0]
 				aacType := frame[1]
-				payload := frame[2:] // if aacType=0 -> ASC, if aacType=1 -> raw AAC
+				payload := frame[2:]
 
-				// Howen vendor framing: 0x00 == AAC
 				if codec != 0x00 {
-					// Non-AAC (e.g., G.711, ADPCM). flv.js won't play—ignore for now.
+					// Not AAC (e.g., G.711/ADPCM). flv.js won't play—ignore for now.
 					break
 				}
 
-				// Helper to push one FLV audio tag downstream
+				// helper to push an FLV audio tag (type=8) downstream
 				pushAudio := func(p []byte) error {
-					tag := packFlvTag(8, ts, p) // 8 = Audio
-					return s.feedOneFlvTag(tag)
+					return s.feedOneFlvTag(packFlvTag(8, ts, p))
 				}
 
-				// Ensure we have sent AAC sequence header at least once (ASC).
+				// Ensure we have sent AAC-LC ASC once (synthetic, ignore device ASC)
 				ensureSeqHeader := func() error {
 					if s.aud.sentAACSeq {
 						return nil
 					}
-
 					if len(s.aud.asc) == 0 {
-						// Build ASC statically for quick testing (AAC-LC + forcedSampleHz + forcedChannels).
 						if idx, ok := aacSamplingIdx(forcedSampleHz); ok && (forcedChannels == 1 || forcedChannels == 2) {
 							s.aud.asc = (&aac.AscContext{
-								AudioObjectType:        2,          // 2 = AAC-LC
-								SamplingFrequencyIndex: idx,        // from forcedSampleHz
+								AudioObjectType:        2,               // AAC-LC (mp4a.40.2)
+								SamplingFrequencyIndex: idx,             // from forcedSampleHz
 								ChannelConfiguration:   uint8(forcedChannels),
 							}).Pack()
 						} else {
-							// Fallback to 16000/mono if values are weird.
+							// fallback to 16000/mono
 							s.aud.asc = (&aac.AscContext{
 								AudioObjectType:        2,
-								SamplingFrequencyIndex: 8, // 16000
-								ChannelConfiguration:   1, // mono
+								SamplingFrequencyIndex: 8,
+								ChannelConfiguration:   1,
 							}).Pack()
 						}
 					}
-
-					// Build FLV AAC seq header payload: 0xAF 0x00 + ASC
+					// FLV AAC seq header: 0xAF 0x00 + ASC (AAC always SoundRate=3/Type=stereo in header; ignored by decoders)
 					seq := make([]byte, 2+len(s.aud.asc))
-					seq[0] = 0xAF // SoundFormat=10(AAC), SoundRate=3, SoundSize=1, SoundType=1 (canonical for AAC-in-FLV)
+					seq[0] = 0xAF
 					seq[1] = 0x00 // AACPacketType=0 (sequence header)
 					copy(seq[2:], s.aud.asc)
-
 					if err := pushAudio(seq); err != nil {
 						return err
 					}
@@ -462,33 +455,26 @@ func (s *WsFlvPullSession) connectAndReadHowen() error {
 
 				switch aacType {
 				case 0x00:
-					// Device provided ASC. Prefer it over static.
-					if len(payload) >= 2 {
-						s.aud.asc = append([]byte(nil), payload...) // copy
-					}
+					// Device ASC present, but we IGNORE it for now to avoid mp4a.40.5; stick to our AAC-LC ASC.
 					if err := ensureSeqHeader(); err != nil {
 						return err
 					}
-
 				case 0x01:
-					// Raw AAC frame. Make sure ASC is sent first (we'll synthesize if needed).
+					// Raw AAC frames: make sure ASC was sent
 					if err := ensureSeqHeader(); err != nil {
 						return err
 					}
-
-					// Build FLV AAC raw payload: 0xAF 0x01 + raw
 					raw := make([]byte, 2+len(payload))
 					raw[0] = 0xAF
-					raw[1] = 0x01 // AACPacketType=1
+					raw[1] = 0x01 // AACPacketType=1 (raw)
 					copy(raw[2:], payload)
-
 					if err := pushAudio(raw); err != nil {
 						return err
 					}
-
 				default:
-					// Unknown subtype—ignore.
+					// Unknown subtype, ignore
 				}
+
 			}
 			// else if ft == howen.FrameAudio { /* wire audio later */ }
 
@@ -533,45 +519,30 @@ func (s *WsFlvPullSession) feedOneFlvTag(b []byte) error {
 }
 
 // --- static AAC config for quick testing ---
-const forcedSampleHz = 16000 // try 16000 first; if silent, try 8000
+const forcedSampleHz = 8000 // try 16000 first; if silent, try 8000
 const forcedChannels = 1     // 1 = mono, 2 = stereo
-
 
 type audioState struct {
     sentAACSeq bool
     asc        []byte
 }
 
-
 // Map Hz -> MPEG-4 ASC sampling index
 func aacSamplingIdx(hz int) (uint8, bool) {
     switch hz {
-    case 96000:
-        return 0, true
-    case 88200:
-        return 1, true
-    case 64000:
-        return 2, true
-    case 48000:
-        return 3, true
-    case 44100:
-        return 4, true
-    case 32000:
-        return 5, true
-    case 24000:
-        return 6, true
-    case 22050:
-        return 7, true
-    case 16000:
-        return 8, true
-    case 12000:
-        return 9, true
-    case 11025:
-        return 10, true
-    case 8000:
-        return 11, true
-    case 7350:
-        return 12, true
+    case 96000: return 0, true
+    case 88200: return 1, true
+    case 64000: return 2, true
+    case 48000: return 3, true
+    case 44100: return 4, true
+    case 32000: return 5, true
+    case 24000: return 6, true
+    case 22050: return 7, true
+    case 16000: return 8, true
+    case 12000: return 9, true
+    case 11025: return 10, true
+    case 8000:  return 11, true
+    case 7350:  return 12, true
     }
     return 0, false
 }
@@ -589,16 +560,13 @@ func packFlvTag(tagType byte, ts uint32, payload []byte) []byte {
     tag[5] = byte((ts >> 8) & 0xFF)
     tag[6] = byte(ts & 0xFF)
     tag[7] = byte((ts >> 24) & 0xFF)
-    // StreamID [8..10] = 0
-
+    // [8..10] StreamID=0
     copy(tag[11:], payload)
-
     prev := 11 + dataSize
     off := 11 + dataSize
     tag[off+0] = byte((prev >> 24) & 0xFF)
     tag[off+1] = byte((prev >> 16) & 0xFF)
     tag[off+2] = byte((prev >> 8) & 0xFF)
     tag[off+3] = byte(prev & 0xFF)
-
     return tag
 }
