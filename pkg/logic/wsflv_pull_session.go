@@ -403,51 +403,47 @@ func (s *WsFlvPullSession) connectAndReadHowen() error {
 					}
 				}
 						
+						
 			case howen.FrameAudio:
-				if len(frame) < 2 { break }
-
-				codec   := frame[0]     // 0x00 == AAC in your mapping
-				aacType := frame[1]     // 0x00 == ASC, 0x01 == raw
+				if len(frame) < 2 {
+					break // ignore tiny packet, keep connection alive
+				}
+				codec   := frame[0] // 0x00 -> AAC in your mapping
+				aacType := frame[1] // 0x00 -> ASC, 0x01 -> raw
 				data    := frame[2:]
 
 				if codec != 0x00 {
-					// Not AAC (e.g., G.711/ADPCM) — flv.js can’t play it; ignore or transcode upstream
+					// Not AAC (e.g., G.711/ADPCM). flv.js can’t play it -> drop (or transcode upstream).
+					// IMPORTANT: DO NOT return; just ignore to keep video flowing.
 					break
 				}
 
 				switch aacType {
-				case 0x00:
-					// Device-provided ASC; store and send once
-					s.aud.asc = append([]byte(nil), data...)
-
-					// Derive channel count from ASC (AudioSpecificConfig: 5+4 bits for sfIndex, 4 bits for channels)
+				case 0x00: // Device ASC
+					// Store device-provided ASC and infer channels
+					s.aud.asc = append(s.aud.asc[:0], data...)
+					// Derive channel count (best effort; ASC parsing trimmed for brevity)
+					s.aud.ch = 1
 					if len(data) >= 2 {
-						ch := int((data[1] & 0x78) >> 3) // upper 4 bits of second byte
-						if ch == 1 || ch == 2 {
+						if ch := int((data[1] & 0x78) >> 3); ch == 1 || ch == 2 {
 							s.aud.ch = ch
-						} else {
-							s.aud.ch = 1 // fallback mono if exotic (keeps header consistent)
 						}
-					} else {
-						s.aud.ch = 1
 					}
-
 					if !s.aud.sentAACSeq {
 						if err := s.pushAACSeq(ts); err != nil { return err }
 						s.aud.sentAACSeq = true
 					}
 
-				case 0x01:
-					// Raw AAC; ensure we sent an ASC first
+				case 0x01: // Raw AAC
 					if !s.aud.sentAACSeq {
-						// If device never sent ASC and you must synthesize:
-						// build AAC-LC ASC at a safer rate (e.g., 16000 Hz) and set s.aud.ch=1/2 to match your encoder
-						// But only do this if you also re-encode or know frames are LC @ that rate.
-						// (Best is always: use device ASC.)
-						return nil
+						// ASC not seen yet — skip this frame but KEEP the stream alive.
+						// (Some encoders send ASC later; video must not be impacted.)
+						// Optionally: log once every N skips to avoid spam.
+						break
 					}
 					if err := s.pushAACRaw(ts, data); err != nil { return err }
 				}
+
 
 
 			}
