@@ -489,7 +489,7 @@ func (s *WsFlvPullSession) connectAndReadHowen() error {
 				default:
 					// Unknown subtype—ignore.
 				}
-
+			}
 			// else if ft == howen.FrameAudio { /* wire audio later */ }
 
 		default:
