@@ -48,7 +48,6 @@ type Config struct {
 	PprofConfig      PprofConfig      `json:"pprof"`
 	LogConfig        nazalog.Option   `json:"log"`
 	DebugConfig      DebugConfig      `json:"debug"`
-	WsFlvPullConfig  WsFlvPullConfig  `json:"wsflv_pull"`
 }
 
 type RtmpConfig struct {
@@ -183,11 +182,6 @@ type CommonHttpAddrConfig struct {
 	HttpsKeyFile    string `json:"https_key_file"`
 }
 
-type WsFlvPullConfig struct {
-	MaxRetries           int `json:"max_retries"`
-	RemotePullTimeoutSec int `json:"remote_pull_timeout_sec"`
-}
-
 func LoadConfAndInitLog(rawContent []byte) *Config {
 	var config *Config
 
@@ -201,16 +195,6 @@ func LoadConfAndInitLog(rawContent []byte) *Config {
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "nazajson unmarshal conf file failed. raw content=%s err=%+v", rawContent, err)
 		base.OsExitAndWaitPressIfWindows(1)
-	}
-
-	if !j.Exist("wsflv_pull.max_retries") || config.WsFlvPullConfig.MaxRetries == 0 {
-		config.WsFlvPullConfig.MaxRetries = 5
-		Log.Warnf("config wsflv_pull.max_retries not exist or zero. set to default which is %d", config.WsFlvPullConfig.MaxRetries)
-	}
-
-	if !j.Exist("wsflv_pull.remote_pull_timeout_sec") || config.WsFlvPullConfig.RemotePullTimeoutSec == 0 {
-		config.WsFlvPullConfig.RemotePullTimeoutSec = 3
-		Log.Warnf("config wsflv_pull.max_retries not exist or zero. set to default which is %d", config.WsFlvPullConfig.RemotePullTimeoutSec)
 	}
 
 	// 初始化日志模块，注意，这一步尽量提前，使得后续的日志内容按我们的日志配置输出

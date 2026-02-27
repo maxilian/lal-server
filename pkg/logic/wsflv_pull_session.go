@@ -74,7 +74,7 @@ func NewWsFlvPullSession(appName string, streamName string, group *Group, cps IC
 	}
 }
 
-func (s *WsFlvPullSession) Start(url string, wsHeaders map[string]string, cfg WsFlvPullConfig) error {
+func (s *WsFlvPullSession) Start(url string, wsHeaders map[string]string) error {
 
 	httpHeaders := http.Header{}
 
@@ -117,8 +117,7 @@ func (s *WsFlvPullSession) Start(url string, wsHeaders map[string]string, cfg Ws
 
 	go s.updateStatsLoop()
 
-	retries := 0
-	for !s.stopped.Load() && retries < cfg.MaxRetries {
+	for !s.stopped.Load() {
 
 		var err error
 
@@ -134,17 +133,10 @@ func (s *WsFlvPullSession) Start(url string, wsHeaders map[string]string, cfg Ws
 			return nil
 		}
 
-		Log.Errorf("wsflv pull error. app=%s stream=%s err=%v",
-			s.appName, s.streamName, err)
+		Log.Warnf("wsflv pull error. stream=%s err=%v",
+			s.streamName, err)
 
-		//time.Sleep(3 * time.Second)
-		time.Sleep(time.Duration(cfg.RemotePullTimeoutSec) * time.Second)
-		retries++
-
-	}
-
-	if retries >= cfg.MaxRetries {
-		Log.Errorf("wsflv pull failed after %v retries", cfg.MaxRetries)
+		time.Sleep(3 * time.Second)
 	}
 
 	return nil
