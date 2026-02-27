@@ -2,6 +2,7 @@ package logic
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net/http"
 	"sync"
@@ -10,16 +11,16 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	transcoder "github.com/lkmio/audio-transcoder"
 	"github.com/q191201771/lal/pkg/base"
 	howen "github.com/q191201771/lal/pkg/howen264"
 	"github.com/q191201771/lal/pkg/httpflv"
 	"github.com/q191201771/lal/pkg/remux"
+)
 
- "encoding/base64"
-  "fmt"
-
-   // "github.com/q191201771/lal/pkg/aac"
-
+const (
+	aacSamplesPerFrame = 1024
+	aacSampleRate      = 8000
 )
 
 type WsFlvPullSession struct {
@@ -39,17 +40,16 @@ type WsFlvPullSession struct {
 	lastStatTime  time.Time
 	lastStatBytes uint64
 
-	howenEnabled bool
-	howenFrames  bool
-	howenJSON    string
-	remuxer      *howen.AVCRemuxer
-	aud audioState
-	
-audSeen         int
-    vidSeen         int
-    audNonAac       int
-    audRawBeforeASC int
-
+	howenEnabled      bool
+	howenFrames       bool
+	howenJSON         string
+	remuxer           *howen.AVCRemuxer
+	g711Decoder       *transcoder.G711Decoder
+	g726Decoder       *transcoder.G726Decoder
+	aacEncoder        *transcoder.AACEncoder
+	aacHeaderSent     bool
+	audioNextTS       uint32
+	audioClockStarted bool
 }
 
 type WsFlvPullStats struct {
@@ -326,9 +326,6 @@ func (s *WsFlvPullSession) GetStats(group *Group) WsFlvPullStats {
 
 func (s *WsFlvPullSession) connectAndReadHowen() error {
 
-	audSeen, vidSeen := 0, 0
-    audNonAac, audRawBeforeASC := 0, 0
-
 	dialer := websocket.DefaultDialer
 	conn, _, err := dialer.Dial(s.url, s.wsHeaders)
 	if err != nil {
@@ -349,7 +346,10 @@ func (s *WsFlvPullSession) connectAndReadHowen() error {
 	}()
 
 	s.remuxer = howen.NewAVCRemuxer()
-	s.aud = audioState{}
+	// initialize audio once
+	if err := s.initAudio("pcma"); err != nil {
+		return err
+	}
 	// Send Howen control json (action=2) if requested
 	if s.howenEnabled && s.howenJSON != "" {
 		payload := howen.BuildHowenControlEnvelope([]byte(s.howenJSON))
@@ -382,20 +382,8 @@ func (s *WsFlvPullSession) connectAndReadHowen() error {
 			if !ok {
 				continue
 			}
-			// Video only for now (H.264)
-			// if ft == howen.FrameI || ft == howen.FrameP {
-			// 	tags, err := s.remuxer.RemuxH264(ts, frame, ft == howen.FrameI)
-			// 	if err != nil {
-			// 		return err
-			// 	}
-			// 	for _, t := range tags {
-			// 		if err := s.feedOneFlvTag(t); err != nil {
-			// 			return err
-			// 		}
-			// 	}
-			// }
 
-			switch ft { 
+			switch ft {
 			case howen.FrameI, howen.FrameP:
 				tags, err := s.remuxer.RemuxH264(ts, frame, ft == howen.FrameI)
 				if err != nil {
@@ -406,86 +394,86 @@ func (s *WsFlvPullSession) connectAndReadHowen() error {
 						return err
 					}
 				}
-						
-				
-				s.vidSeen++
-				if s.vidSeen%120 == 0 {
-					Log.Infof("[TAP] video=%d audio=%d", s.vidSeen, s.audSeen)
-				}
-			
+
 			case howen.FrameAudio:
-				// Count every audio frame observed (regardless of codec)
-				s.audSeen++
+				var pcm []byte
 
-				// Each Howen audio frame: frame[0]=codec, frame[1]=AAC subtype (if AAC), frame[2:] = payload
-				if len(frame) < 2 {
-					// Too small to contain codec + subtype; ignore but DO NOT return
-					if s.audSeen <= 3 {
-						Log.Warnf("[AUDIO] tiny frame len=%d ts=%d (ignored)", len(frame), ts)
-					}
-					break
+				// Decode G.711 if available
+				if s.g711Decoder != nil {
+					pcm = make([]byte, len(frame)*2)
+					n, _ := s.g711Decoder.Decode(frame, pcm)
+					pcm = pcm[:n]
+				} else {
+					pcm = frame
 				}
 
-				codec   := frame[0] // your mapping: 0x00 => AAC (adjust if your firmware differs)
-				aacType := frame[1] // for AAC only: 0x00 => ASC, 0x01 => RAW AAC
-				data    := frame[2:]
-
-				// 1) Accept only AAC in the FLV path for flv.js; drop other codecs (G.711/ADPCM/etc)
-				if codec != 0x00 {
-					s.audNonAac++
-					if s.audNonAac <= 5 {
-						Log.Warnf("[AUDIO] non-AAC codec=0x%02X len=%d ts=%d (dropped; flv.js expects AAC)", codec, len(frame), ts)
-					}
-					break // keep connection alive, just don't feed non-AAC
+				if len(pcm) == 0 {
+					continue
 				}
+				//fmt.Println("AAC ASC:", s.aacEncoder.ExtraData())
+				// Send AAC sequence header once
+				if !s.aacHeaderSent && len(s.aacEncoder.ExtraData()) > 0 {
 
-				// 2) Handle AAC subtypes
-				switch aacType {
-				case 0x00: // AAC Sequence Header (AudioSpecificConfig)
-					// Store ASC exactly as provided by device (no synth unless device never sends it)
-					s.aud.asc = append(s.aud.asc[:0], data...)
+					asc := s.aacEncoder.ExtraData()
+					payload := buildAACRTMPPayload(asc, true)
 
-					// Derive channel count from ASC (MPEG-4 AudioSpecificConfig):
-					// channel_configuration is 4 bits in the high nibble of byte 1 (after 5+4 bits)
-					s.aud.ch = 1 // default mono if unknown
-					if len(data) >= 2 {
-						ch := int((data[1] & 0x78) >> 3) // upper 4 bits of second ASC byte
-						if ch == 1 || ch == 2 {
-							s.aud.ch = ch
-						}
+					rtmpMsg := base.RtmpMsg{
+						Header: base.RtmpHeader{
+							Csid:         4,
+							MsgLen:       uint32(len(payload)),
+							MsgTypeId:    base.RtmpTypeIdAudio,
+							MsgStreamId:  1,
+							TimestampAbs: uint32(ts),
+						},
+						Payload: payload,
 					}
 
-					// Send FLV AAC sequence header once
-					if !s.aud.sentAACSeq {
-						if err := s.pushAACSeq(ts); err != nil {
-							return err
-						}
-						s.aud.sentAACSeq = true
-						Log.Infof("[AUDIO] AAC ASC received & sent (ch=%d bytes=%d ts=%d)", s.aud.ch, len(data), ts)
-					}
-
-				case 0x01: // Raw AAC frame
-					if !s.aud.sentAACSeq {
-						// We haven't seen ASC yet: skip raw but DO NOT return (keeps video flowing)
-						s.audRawBeforeASC++
-						if s.audRawBeforeASC <= 5 {
-							Log.Warnf("[AUDIO] raw AAC before ASC; skipping (len=%d ts=%d)", len(data), ts)
-						}
-						break
-					}
-					// ASC already sent → forward raw AAC
-					if err := s.pushAACRaw(ts, data); err != nil {
+					if err := s.cps.FeedRtmpMsg(rtmpMsg); err != nil {
 						return err
 					}
 
-				default:
-					// Unknown AAC subtype; ignore safely
-					if s.audSeen <= 5 {
-						Log.Warnf("[AUDIO] unknown AAC subtype=0x%02X len=%d ts=%d (ignored)", aacType, len(data), ts)
-					}
+					s.aacHeaderSent = true
 				}
 
+				// Encode PCM → AAC
+				_, _ = s.aacEncoder.Encode(pcm, func(aacPkt []byte) {
 
+					// Ignore ASC packets
+					if len(aacPkt) == 2 &&
+						len(s.aacEncoder.ExtraData()) == 2 &&
+						aacPkt[0] == s.aacEncoder.ExtraData()[0] &&
+						aacPkt[1] == s.aacEncoder.ExtraData()[1] {
+						return
+					}
+
+					// === Drive timestamps from AAC frame duration ===
+
+					const frameDurationMs = uint32(aacSamplesPerFrame * 1000 / aacSampleRate)
+					// = 128ms at 8kHz
+
+					if !s.audioClockStarted {
+						s.audioNextTS = uint32(ts) // use first ts once
+						s.audioClockStarted = true
+					}
+
+					currentTS := s.audioNextTS
+					s.audioNextTS += frameDurationMs
+
+					payload := buildAACRTMPPayload(aacPkt, false)
+
+					rtmpMsg := base.RtmpMsg{
+						Header: base.RtmpHeader{
+							Csid:         4,
+							MsgLen:       uint32(len(payload)),
+							MsgTypeId:    base.RtmpTypeIdAudio,
+							MsgStreamId:  1,
+							TimestampAbs: currentTS,
+						},
+						Payload: payload,
+					}
+
+					_ = s.cps.FeedRtmpMsg(rtmpMsg)
+				})
 			}
 			// else if ft == howen.FrameAudio { /* wire audio later */ }
 
@@ -495,24 +483,7 @@ func (s *WsFlvPullSession) connectAndReadHowen() error {
 	}
 }
 
-// helper: parse a single FLV tag (with PrevTagSize) and feed RTMP
-// func (s *WsFlvPullSession) feedOneFlvTag(b []byte) error {
-// 	reader := bytes.NewReader(b)
-// 	tag, err := httpflv.ReadTag(reader)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	rtmpMsg := remux.FlvTag2RtmpMsg(tag)
-// 	return s.cps.FeedRtmpMsg(rtmpMsg)
-// }
-
 func (s *WsFlvPullSession) feedOneFlvTag(b []byte) error {
-	
-if len(b) >= 12 && b[0] == 8 { // TagType=8 (audio)
-    ts := (uint32(b[4])<<16) | (uint32(b[5])<<8) | uint32(b[6])
-    ts |= uint32(b[7]) << 24
-    dumpTagAsB64(ts, b)
-  }
 
 	reader := bytes.NewReader(b)
 	tag, err := httpflv.ReadTag(reader)
@@ -536,94 +507,52 @@ if len(b) >= 12 && b[0] == 8 { // TagType=8 (audio)
 	return nil
 }
 
-// --- static AAC config for quick testing ---
-const forcedSampleHz = 8000 // try 16000 first; if silent, try 8000
-const forcedChannels = 1     // 1 = mono, 2 = stereo
+func (s *WsFlvPullSession) initAudio(audioCodec string) error {
+	// ===== Init G.711 decoder =====
+	switch audioCodec {
+	case "pcma", "pcmu":
+		s.g711Decoder = &transcoder.G711Decoder{}
+	default:
+		s.g711Decoder = nil
+	}
 
-type audioState struct {
-    sentAACSeq bool
-    asc        []byte
-    ch         int
+	// ===== Init AAC encoder =====
+	s.aacEncoder = &transcoder.AACEncoder{}
+	sampleRate := 8000
+	channels := 1
+	_, err := s.aacEncoder.Create(sampleRate, channels, 0)
+	if err != nil {
+		return fmt.Errorf("failed to create AAC encoder: %v", err)
+	}
+
+	s.aacHeaderSent = false
+	s.audioNextTS = 0
+	s.audioClockStarted = false
+	return nil
 }
 
-// Map Hz -> MPEG-4 ASC sampling index
-func aacSamplingIdx(hz int) (uint8, bool) {
-    switch hz {
-    case 96000: return 0, true
-    case 88200: return 1, true
-    case 64000: return 2, true
-    case 48000: return 3, true
-    case 44100: return 4, true
-    case 32000: return 5, true
-    case 24000: return 6, true
-    case 22050: return 7, true
-    case 16000: return 8, true
-    case 12000: return 9, true
-    case 11025: return 10, true
-    case 8000:  return 11, true
-    case 7350:  return 12, true
-    }
-    return 0, false
-}
+// buildAACRTMPPayload wraps raw AAC data into an FLV audio tag payload.
+// 'isSeqHeader' should be true for the AAC sequence header, false for actual frames.
+func buildAACRTMPPayload(aacData []byte, isSeqHeader bool) []byte {
 
-// Build full FLV tag (TagHeader + Payload + PrevTagSize). tagType: 8=audio, 9=video
-func packFlvTag(tagType byte, ts uint32, payload []byte) []byte {
-    dataSize := len(payload)
-    tag := make([]byte, 11+dataSize+4)
+	// First byte: SoundFormat(10=AAC) | SoundRate(3=44k) | SoundSize(1=16bit) | SoundType(1=stereo)
+	// For AAC, SoundRate/SoundSize are ignored.
+	soundHeader := byte(0xAF)
 
-    tag[0] = tagType
-    tag[1] = byte((dataSize >> 16) & 0xFF)
-    tag[2] = byte((dataSize >> 8) & 0xFF)
-    tag[3] = byte(dataSize & 0xFF)
-    tag[4] = byte((ts >> 16) & 0xFF)
-    tag[5] = byte((ts >> 8) & 0xFF)
-    tag[6] = byte(ts & 0xFF)
-    tag[7] = byte((ts >> 24) & 0xFF)
-    // [8..10] StreamID=0
-    copy(tag[11:], payload)
-    prev := 11 + dataSize
-    off := 11 + dataSize
-    tag[off+0] = byte((prev >> 24) & 0xFF)
-    tag[off+1] = byte((prev >> 16) & 0xFF)
-    tag[off+2] = byte((prev >> 8) & 0xFF)
-    tag[off+3] = byte(prev & 0xFF)
-    return tag
-}
+	// Second byte: AACPacketType
+	// 0 = sequence header
+	// 1 = raw AAC frame
+	var aacPacketType byte
+	if isSeqHeader {
+		aacPacketType = 0
+	} else {
+		aacPacketType = 1
+	}
 
-// Choose the FLV audio header first byte based on channel count:
-// 0xAE = AAC + mono; 0xAF = AAC + stereo
-func (s *WsFlvPullSession) makeAudioHdrByte() byte {
-    if s.aud.ch == 2 { return 0xAF }
-    return 0xAE
-}
+	payload := make([]byte, 2+len(aacData))
+	payload[0] = soundHeader
+	payload[1] = aacPacketType
+	copy(payload[2:], aacData)
 
-// Send the AAC Sequence Header (ASC) as one FLV audio tag
-func (s *WsFlvPullSession) pushAACSeq(ts uint32) error {
-    b0 := s.makeAudioHdrByte()
-    payload := make([]byte, 2+len(s.aud.asc))
-    payload[0] = b0
-    payload[1] = 0x00 // AACPacketType=0 (sequence header)
-    copy(payload[2:], s.aud.asc)
-    return s.feedOneFlvTag(packFlvTag(8, ts, payload))
-}
-
-// Send a raw AAC frame as one FLV audio tag
-func (s *WsFlvPullSession) pushAACRaw(ts uint32, raw []byte) error {
-    b0 := s.makeAudioHdrByte()
-    payload := make([]byte, 2+len(raw))
-    payload[0] = b0
-    payload[1] = 0x01 // AACPacketType=1 (raw)
-    copy(payload[2:], raw)
-    return s.feedOneFlvTag(packFlvTag(8, ts, payload))
-}
-
-
-
-var dumpCnt int
-
-func dumpTagAsB64(ts uint32, fullFlvTag []byte) {
-  if dumpCnt >= 6 { return } // 1 seq + 5 raw is plenty
-  b64 := base64.StdEncoding.EncodeToString(fullFlvTag)
-  fmt.Printf("{\"ts\":%d,\"len\":%d,\"tag_b64\":\"%s\"}\n", ts, len(fullFlvTag), b64)
-  dumpCnt++
+	return payload
 }
