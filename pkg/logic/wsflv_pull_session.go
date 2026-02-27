@@ -383,17 +383,17 @@ func (s *WsFlvPullSession) connectAndReadHowen() error {
 				continue
 			}
 			// Video only for now (H.264)
-			if ft == howen.FrameI || ft == howen.FrameP {
-				tags, err := s.remuxer.RemuxH264(ts, frame, ft == howen.FrameI)
-				if err != nil {
-					return err
-				}
-				for _, t := range tags {
-					if err := s.feedOneFlvTag(t); err != nil {
-						return err
-					}
-				}
-			}
+			// if ft == howen.FrameI || ft == howen.FrameP {
+			// 	tags, err := s.remuxer.RemuxH264(ts, frame, ft == howen.FrameI)
+			// 	if err != nil {
+			// 		return err
+			// 	}
+			// 	for _, t := range tags {
+			// 		if err := s.feedOneFlvTag(t); err != nil {
+			// 			return err
+			// 		}
+			// 	}
+			// }
 
 			switch ft { 
 			case howen.FrameI, howen.FrameP:
