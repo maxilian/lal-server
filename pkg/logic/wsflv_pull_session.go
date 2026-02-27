@@ -404,66 +404,92 @@ func (s *WsFlvPullSession) connectAndReadHowen() error {
 				}
 			case howen.FrameAudio:
 				if len(frame) < 2 {
-					continue
+					break
 				}
 
 				codec := frame[0]
 				aacType := frame[1]
-				payload := frame[2:]
+				payload := frame[2:] // if aacType=0 -> ASC, if aacType=1 -> raw AAC
 
-				// Vendor hint: 0x00 => AAC; 0x01/0x02 might be G.711 variants on some devices.
+				// Howen vendor framing: 0x00 == AAC
 				if codec != 0x00 {
-					// Not AAC. flv.js won’t play G.711/PCM in FLV. You can wrap them,
-					// but the browser will be silent.
-					// Log once if needed, then continue:
-					// Log.Debugf("Howen audio: non-AAC codec=0x%02X len=%d", codec, len(payload))
-					continue
+					// Non-AAC (e.g., G.711, ADPCM). flv.js won't play—ignore for now.
+					break
+				}
+
+				// Helper to push one FLV audio tag downstream
+				pushAudio := func(p []byte) error {
+					tag := packFlvTag(8, ts, p) // 8 = Audio
+					return s.feedOneFlvTag(tag)
+				}
+
+				// Ensure we have sent AAC sequence header at least once (ASC).
+				ensureSeqHeader := func() error {
+					if s.aud.sentAACSeq {
+						return nil
+					}
+
+					if len(s.aud.asc) == 0 {
+						// Build ASC statically for quick testing (AAC-LC + forcedSampleHz + forcedChannels).
+						if idx, ok := aacSamplingIdx(forcedSampleHz); ok && (forcedChannels == 1 || forcedChannels == 2) {
+							s.aud.asc = (&aac.AscContext{
+								AudioObjectType:        2,          // 2 = AAC-LC
+								SamplingFrequencyIndex: idx,        // from forcedSampleHz
+								ChannelConfiguration:   uint8(forcedChannels),
+							}).Pack()
+						} else {
+							// Fallback to 16000/mono if values are weird.
+							s.aud.asc = (&aac.AscContext{
+								AudioObjectType:        2,
+								SamplingFrequencyIndex: 8, // 16000
+								ChannelConfiguration:   1, // mono
+							}).Pack()
+						}
+					}
+
+					// Build FLV AAC seq header payload: 0xAF 0x00 + ASC
+					seq := make([]byte, 2+len(s.aud.asc))
+					seq[0] = 0xAF // SoundFormat=10(AAC), SoundRate=3, SoundSize=1, SoundType=1 (canonical for AAC-in-FLV)
+					seq[1] = 0x00 // AACPacketType=0 (sequence header)
+					copy(seq[2:], s.aud.asc)
+
+					if err := pushAudio(seq); err != nil {
+						return err
+					}
+					s.aud.sentAACSeq = true
+					return nil
 				}
 
 				switch aacType {
 				case 0x00:
-					// Sequence header (ASC)
-					if len(payload) < 2 {
-						// invalid ASC
-						break
+					// Device provided ASC. Prefer it over static.
+					if len(payload) >= 2 {
+						s.aud.asc = append([]byte(nil), payload...) // copy
 					}
-					// Build FLV AAC sequence header payload: 0xAF 0x00 + ASC
-					seqPayload := make([]byte, 2+len(payload))
-					seqPayload[0] = 0xAF // SoundFormat=10(AAC), SoundRate=3, SoundSize=1, SoundType=1 (canonical for AAC)
-					seqPayload[1] = 0x00 // AACPacketType=0 => sequence header
-					copy(seqPayload[2:], payload)
-
-					seqTag := packFlvTag(8, ts, seqPayload)
-					if err := s.feedOneFlvTag(seqTag); err != nil {
+					if err := ensureSeqHeader(); err != nil {
 						return err
 					}
-					s.aud.sentAACSeq = true
-					// Log.Infof("Howen audio: AAC ASC sent, len=%d", len(payload))
 
 				case 0x01:
-					// Raw AAC frame
-					if !s.aud.sentAACSeq {
-						// We *must* have sent ASC before any raw frames for flv.js to work.
-						// Drop until we receive ASC from device (aacType=0). Do not synthesize unless you are 100% sure of SR/ch.
-						// Log.Warnf("Howen audio: got raw AAC before ASC; dropping %d bytes", len(payload))
-						break
+					// Raw AAC frame. Make sure ASC is sent first (we'll synthesize if needed).
+					if err := ensureSeqHeader(); err != nil {
+						return err
 					}
-					rawPayload := make([]byte, 2+len(payload))
-					rawPayload[0] = 0xAF // AAC
-					rawPayload[1] = 0x01 // AACPacketType=1 => raw
-					copy(rawPayload[2:], payload)
 
-					rawTag := packFlvTag(8, ts, rawPayload)
-					if err := s.feedOneFlvTag(rawTag); err != nil {
+					// Build FLV AAC raw payload: 0xAF 0x01 + raw
+					raw := make([]byte, 2+len(payload))
+					raw[0] = 0xAF
+					raw[1] = 0x01 // AACPacketType=1
+					copy(raw[2:], payload)
+
+					if err := pushAudio(raw); err != nil {
 						return err
 					}
 
 				default:
-					// Unknown aacType – ignore
-					// Log.Warnf("Howen audio: unknown aacType=0x%02X len=%d", aacType, len(payload))
+					// Unknown subtype—ignore.
 				}
 
-			}
 			// else if ft == howen.FrameAudio { /* wire audio later */ }
 
 		default:
