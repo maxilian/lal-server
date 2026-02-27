@@ -349,7 +349,7 @@ func (s *WsFlvPullSession) connectAndReadHowen() error {
 	}()
 
 	s.remuxer = howen.NewAVCRemuxer()
-
+	s.aud = audioState{}
 	// Send Howen control json (action=2) if requested
 	if s.howenEnabled && s.howenJSON != "" {
 		payload := howen.BuildHowenControlEnvelope([]byte(s.howenJSON))
@@ -407,70 +407,64 @@ func (s *WsFlvPullSession) connectAndReadHowen() error {
 					}
 				}
 			case howen.FrameAudio:
-				if len(frame) == 0 {
+				if len(frame) < 2 {
 					continue
 				}
 
-				// We handle AAC with ADTS. If frame contains multiple ADTS frames concatenated, loop them.
-				buf := frame
-				for {
-					if len(buf) < aac.AdtsHeaderLength {
-						break
-					}
-					// ADTS sync check: 0xFFF
-					if !(buf[0] == 0xFF && (buf[1]&0xF0) == 0xF0) {
-						// Not ADTS. If your stream is raw AAC (no ADTS) + ASC from metadata,
-						// handle that in a separate branch (see notes below).
-						Log.Warnf("Howen audio: not ADTS AAC, len=%d, head=%02X %02X", len(buf), buf[0], buf[1])
-						break
-					}
+				codec := frame[0]
+				aacType := frame[1]
+				payload := frame[2:]
 
-					// Parse ADTS header (7 bytes)
-					hdr, err := aac.NewAdtsHeaderContext(buf[:aac.AdtsHeaderLength])
-					if err != nil {
-						Log.Warnf("Howen audio: ADTS header parse failed: %v", err)
-						break
-					}
-					adtsLen := int(hdr.AdtsLength) // includes 7-byte header
-					if adtsLen <= aac.AdtsHeaderLength || adtsLen > len(buf) {
-						Log.Warnf("Howen audio: invalid ADTS length: %d (buf=%d)", adtsLen, len(buf))
-						break
-					}
+				// Vendor hint: 0x00 => AAC; 0x01/0x02 might be G.711 variants on some devices.
+				if codec != 0x00 {
+					// Not AAC. flv.js won’t play G.711/PCM in FLV. You can wrap them,
+					// but the browser will be silent.
+					// Log once if needed, then continue:
+					// Log.Debugf("Howen audio: non-AAC codec=0x%02X len=%d", codec, len(payload))
+					continue
+				}
 
-					// 1) Send AAC Sequence Header once
+				switch aacType {
+				case 0x00:
+					// Sequence header (ASC)
+					if len(payload) < 2 {
+						// invalid ASC
+						break
+					}
+					// Build FLV AAC sequence header payload: 0xAF 0x00 + ASC
+					seqPayload := make([]byte, 2+len(payload))
+					seqPayload[0] = 0xAF // SoundFormat=10(AAC), SoundRate=3, SoundSize=1, SoundType=1 (canonical for AAC)
+					seqPayload[1] = 0x00 // AACPacketType=0 => sequence header
+					copy(seqPayload[2:], payload)
+
+					seqTag := packFlvTag(8, ts, seqPayload)
+					if err := s.feedOneFlvTag(seqTag); err != nil {
+						return err
+					}
+					s.aud.sentAACSeq = true
+					// Log.Infof("Howen audio: AAC ASC sent, len=%d", len(payload))
+
+				case 0x01:
+					// Raw AAC frame
 					if !s.aud.sentAACSeq {
-						seqPayload, err := aac.MakeAudioDataSeqHeaderWithAdtsHeader(buf[:aac.AdtsHeaderLength])
-						if err != nil {
-							Log.Warnf("Howen audio: make AAC seq header failed: %v", err)
-							// Can't continue without ASC for flv.js
-							break
-						}
-						// Build complete FLV audio tag (type=8)
-						seqTag := packFlvTag(8, ts, seqPayload)
-						if err := s.feedOneFlvTag(seqTag); err != nil {
-							return err
-						}
-						s.aud.sentAACSeq = true
+						// We *must* have sent ASC before any raw frames for flv.js to work.
+						// Drop until we receive ASC from device (aacType=0). Do not synthesize unless you are 100% sure of SR/ch.
+						// Log.Warnf("Howen audio: got raw AAC before ASC; dropping %d bytes", len(payload))
+						break
 					}
+					rawPayload := make([]byte, 2+len(payload))
+					rawPayload[0] = 0xAF // AAC
+					rawPayload[1] = 0x01 // AACPacketType=1 => raw
+					copy(rawPayload[2:], payload)
 
-					// 2) Send AAC raw frame (strip ADTS header)
-					raw := buf[aac.AdtsHeaderLength:adtsLen]
-					// AAC raw FLV payload: 0xAF 0x01 + raw
-					payload := make([]byte, 2+len(raw))
-					payload[0] = 0xAF // SoundFormat=10(AAC), SoundRate=3, SoundSize=1, SoundType=1 (canonical for AAC in FLV)
-					payload[1] = 0x01 // AACPacketType = 1 (raw)
-					copy(payload[2:], raw)
-
-					rawTag := packFlvTag(8, ts, payload)
+					rawTag := packFlvTag(8, ts, rawPayload)
 					if err := s.feedOneFlvTag(rawTag); err != nil {
 						return err
 					}
 
-					// Advance if multiple ADTS frames are packed
-					buf = buf[adtsLen:]
-					if len(buf) < aac.AdtsHeaderLength {
-						break
-					}
+				default:
+					// Unknown aacType – ignore
+					// Log.Warnf("Howen audio: unknown aacType=0x%02X len=%d", aacType, len(payload))
 				}
 
 			}
