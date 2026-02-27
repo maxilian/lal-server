@@ -15,6 +15,9 @@ import (
 	"github.com/q191201771/lal/pkg/httpflv"
 	"github.com/q191201771/lal/pkg/remux"
 
+ "encoding/base64"
+  "fmt"
+
    // "github.com/q191201771/lal/pkg/aac"
 
 )
@@ -467,7 +470,13 @@ func (s *WsFlvPullSession) connectAndReadHowen() error {
 // }
 
 func (s *WsFlvPullSession) feedOneFlvTag(b []byte) error {
-	dumpFlvTagOnce(b)
+	
+if len(b) >= 12 && b[0] == 8 { // TagType=8 (audio)
+    ts := (uint32(b[4])<<16) | (uint32(b[5])<<8) | uint32(b[6])
+    ts |= uint32(b[7]) << 24
+    dumpTagAsB64(ts, b)
+  }
+
 	reader := bytes.NewReader(b)
 	tag, err := httpflv.ReadTag(reader)
 	if err != nil {
@@ -569,22 +578,12 @@ func (s *WsFlvPullSession) pushAACRaw(ts uint32, frame []byte) error {
     return s.feedOneFlvTag(packFlvTag(8, ts, payload))
 }
 
-// at top of file
-var dumpOnce sync.Once
-var dumpFile *os.File
-var dumpCount int
 
-func dumpFlvTagOnce(b []byte) {
-    dumpOnce.Do(func() {
-        f, err := os.Create("sample_flv_audio.bin")
-        if err == nil { dumpFile = f }
-    })
-    if dumpFile == nil { return }
-    if dumpCount >= 6 { return } // 1 seq + 5 raw is plenty
-    dumpCount++
-    dumpFile.Write(b)
-    if dumpCount == 6 {
-        dumpFile.Close()
-        dumpFile = nil
-    }
+var dumpCnt int
+
+func dumpTagAsB64(ts uint32, fullFlvTag []byte) {
+  if dumpCnt >= 6 { return } // 1 seq + 5 raw is plenty
+  b64 := base64.StdEncoding.EncodeToString(fullFlvTag)
+  fmt.Printf("{\"ts\":%d,\"len\":%d,\"tag_b64\":\"%s\"}\n", ts, len(fullFlvTag), b64)
+  dumpCnt++
 }
