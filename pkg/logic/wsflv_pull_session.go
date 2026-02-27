@@ -19,11 +19,6 @@ import (
 
 )
 
-
-type audioState struct {
-    sentAACSeq bool
-}
-
 type WsFlvPullSession struct {
 	appName       string
 	streamName    string
@@ -46,6 +41,7 @@ type WsFlvPullSession struct {
 	howenJSON    string
 	remuxer      *howen.AVCRemuxer
 	aud audioState
+	
 }
 
 type WsFlvPullStats struct {
@@ -510,13 +506,55 @@ func (s *WsFlvPullSession) feedOneFlvTag(b []byte) error {
 	return nil
 }
 
-// packFlvTag builds a full FLV tag with given type (8=audio, 9=video), timestamp (ms), and payload.
-// Payload for audio must already start with the FLV audio header byte(s), e.g. 0xAF 0x00 + ASC, or 0xAF 0x01 + raw.
+// --- static AAC config for quick testing ---
+const forcedSampleHz = 16000 // try 16000 first; if silent, try 8000
+const forcedChannels = 1     // 1 = mono, 2 = stereo
+
+
+type audioState struct {
+    sentAACSeq bool
+    asc        []byte
+}
+
+
+// Map Hz -> MPEG-4 ASC sampling index
+func aacSamplingIdx(hz int) (uint8, bool) {
+    switch hz {
+    case 96000:
+        return 0, true
+    case 88200:
+        return 1, true
+    case 64000:
+        return 2, true
+    case 48000:
+        return 3, true
+    case 44100:
+        return 4, true
+    case 32000:
+        return 5, true
+    case 24000:
+        return 6, true
+    case 22050:
+        return 7, true
+    case 16000:
+        return 8, true
+    case 12000:
+        return 9, true
+    case 11025:
+        return 10, true
+    case 8000:
+        return 11, true
+    case 7350:
+        return 12, true
+    }
+    return 0, false
+}
+
+// Build full FLV tag (TagHeader + Payload + PrevTagSize). tagType: 8=audio, 9=video
 func packFlvTag(tagType byte, ts uint32, payload []byte) []byte {
     dataSize := len(payload)
     tag := make([]byte, 11+dataSize+4)
 
-    // Tag header
     tag[0] = tagType
     tag[1] = byte((dataSize >> 16) & 0xFF)
     tag[2] = byte((dataSize >> 8) & 0xFF)
@@ -525,7 +563,7 @@ func packFlvTag(tagType byte, ts uint32, payload []byte) []byte {
     tag[5] = byte((ts >> 8) & 0xFF)
     tag[6] = byte(ts & 0xFF)
     tag[7] = byte((ts >> 24) & 0xFF)
-    // tag[8..10] = 0 (StreamID)
+    // StreamID [8..10] = 0
 
     copy(tag[11:], payload)
 
