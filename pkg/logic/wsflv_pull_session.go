@@ -45,6 +45,11 @@ type WsFlvPullSession struct {
 	remuxer      *howen.AVCRemuxer
 	aud audioState
 	
+audSeen         int
+    vidSeen         int
+    audNonAac       int
+    audRawBeforeASC int
+
 }
 
 type WsFlvPullStats struct {
@@ -328,6 +333,10 @@ func (s *WsFlvPullSession) GetStats(group *Group) WsFlvPullStats {
 }
 
 func (s *WsFlvPullSession) connectAndReadHowen() error {
+
+	audSeen, vidSeen := 0, 0
+    audNonAac, audRawBeforeASC := 0, 0
+
 	dialer := websocket.DefaultDialer
 	conn, _, err := dialer.Dial(s.url, s.wsHeaders)
 	if err != nil {
@@ -406,47 +415,83 @@ func (s *WsFlvPullSession) connectAndReadHowen() error {
 					}
 				}
 						
-						
-			case howen.FrameAudio:
-				if len(frame) < 2 {
-					break // ignore tiny packet, keep connection alive
+				
+				s.vidSeen++
+				if s.vidSeen%120 == 0 {
+					Log.Infof("[TAP] video=%d audio=%d", s.vidSeen, s.audSeen)
 				}
-				codec   := frame[0] // 0x00 -> AAC in your mapping
-				aacType := frame[1] // 0x00 -> ASC, 0x01 -> raw
-				data    := frame[2:]
+			
+			case howen.FrameAudio:
+				// Count every audio frame observed (regardless of codec)
+				s.audSeen++
 
-				if codec != 0x00 {
-					// Not AAC (e.g., G.711/ADPCM). flv.js can’t play it -> drop (or transcode upstream).
-					// IMPORTANT: DO NOT return; just ignore to keep video flowing.
+				// Each Howen audio frame: frame[0]=codec, frame[1]=AAC subtype (if AAC), frame[2:] = payload
+				if len(frame) < 2 {
+					// Too small to contain codec + subtype; ignore but DO NOT return
+					if s.audSeen <= 3 {
+						Log.Warnf("[AUDIO] tiny frame len=%d ts=%d (ignored)", len(frame), ts)
+					}
 					break
 				}
 
+				codec   := frame[0] // your mapping: 0x00 => AAC (adjust if your firmware differs)
+				aacType := frame[1] // for AAC only: 0x00 => ASC, 0x01 => RAW AAC
+				data    := frame[2:]
+
+				// 1) Accept only AAC in the FLV path for flv.js; drop other codecs (G.711/ADPCM/etc)
+				if codec != 0x00 {
+					s.audNonAac++
+					if s.audNonAac <= 5 {
+						Log.Warnf("[AUDIO] non-AAC codec=0x%02X len=%d ts=%d (dropped; flv.js expects AAC)", codec, len(frame), ts)
+					}
+					break // keep connection alive, just don't feed non-AAC
+				}
+
+				// 2) Handle AAC subtypes
 				switch aacType {
-				case 0x00: // Device ASC
-					// Store device-provided ASC and infer channels
+				case 0x00: // AAC Sequence Header (AudioSpecificConfig)
+					// Store ASC exactly as provided by device (no synth unless device never sends it)
 					s.aud.asc = append(s.aud.asc[:0], data...)
-					// Derive channel count (best effort; ASC parsing trimmed for brevity)
-					s.aud.ch = 1
+
+					// Derive channel count from ASC (MPEG-4 AudioSpecificConfig):
+					// channel_configuration is 4 bits in the high nibble of byte 1 (after 5+4 bits)
+					s.aud.ch = 1 // default mono if unknown
 					if len(data) >= 2 {
-						if ch := int((data[1] & 0x78) >> 3); ch == 1 || ch == 2 {
+						ch := int((data[1] & 0x78) >> 3) // upper 4 bits of second ASC byte
+						if ch == 1 || ch == 2 {
 							s.aud.ch = ch
 						}
 					}
+
+					// Send FLV AAC sequence header once
 					if !s.aud.sentAACSeq {
-						if err := s.pushAACSeq(ts); err != nil { return err }
+						if err := s.pushAACSeq(ts); err != nil {
+							return err
+						}
 						s.aud.sentAACSeq = true
+						Log.Infof("[AUDIO] AAC ASC received & sent (ch=%d bytes=%d ts=%d)", s.aud.ch, len(data), ts)
 					}
 
-				case 0x01: // Raw AAC
+				case 0x01: // Raw AAC frame
 					if !s.aud.sentAACSeq {
-						// ASC not seen yet — skip this frame but KEEP the stream alive.
-						// (Some encoders send ASC later; video must not be impacted.)
-						// Optionally: log once every N skips to avoid spam.
+						// We haven't seen ASC yet: skip raw but DO NOT return (keeps video flowing)
+						s.audRawBeforeASC++
+						if s.audRawBeforeASC <= 5 {
+							Log.Warnf("[AUDIO] raw AAC before ASC; skipping (len=%d ts=%d)", len(data), ts)
+						}
 						break
 					}
-					if err := s.pushAACRaw(ts, data); err != nil { return err }
-				}
+					// ASC already sent → forward raw AAC
+					if err := s.pushAACRaw(ts, data); err != nil {
+						return err
+					}
 
+				default:
+					// Unknown AAC subtype; ignore safely
+					if s.audSeen <= 5 {
+						Log.Warnf("[AUDIO] unknown AAC subtype=0x%02X len=%d ts=%d (ignored)", aacType, len(data), ts)
+					}
+				}
 
 
 			}
@@ -553,15 +598,16 @@ func packFlvTag(tagType byte, ts uint32, payload []byte) []byte {
     return tag
 }
 
-
-func (s *WsFlvPullSession) makeAudioHdrByte(ch int) byte {
-    // SoundFormat=10 (AAC) | SoundRate (ignored for AAC) | SoundSize=1 | SoundType=(ch==2?1:0)
-    if ch == 2 { return 0xAF } // stereo
-    return 0xAE                 // mono
+// Choose the FLV audio header first byte based on channel count:
+// 0xAE = AAC + mono; 0xAF = AAC + stereo
+func (s *WsFlvPullSession) makeAudioHdrByte() byte {
+    if s.aud.ch == 2 { return 0xAF }
+    return 0xAE
 }
 
+// Send the AAC Sequence Header (ASC) as one FLV audio tag
 func (s *WsFlvPullSession) pushAACSeq(ts uint32) error {
-    b0 := s.makeAudioHdrByte(s.aud.ch)
+    b0 := s.makeAudioHdrByte()
     payload := make([]byte, 2+len(s.aud.asc))
     payload[0] = b0
     payload[1] = 0x00 // AACPacketType=0 (sequence header)
@@ -569,14 +615,16 @@ func (s *WsFlvPullSession) pushAACSeq(ts uint32) error {
     return s.feedOneFlvTag(packFlvTag(8, ts, payload))
 }
 
-func (s *WsFlvPullSession) pushAACRaw(ts uint32, frame []byte) error {
-    b0 := s.makeAudioHdrByte(s.aud.ch)
-    payload := make([]byte, 2+len(frame))
+// Send a raw AAC frame as one FLV audio tag
+func (s *WsFlvPullSession) pushAACRaw(ts uint32, raw []byte) error {
+    b0 := s.makeAudioHdrByte()
+    payload := make([]byte, 2+len(raw))
     payload[0] = b0
     payload[1] = 0x01 // AACPacketType=1 (raw)
-    copy(payload[2:], frame)
+    copy(payload[2:], raw)
     return s.feedOneFlvTag(packFlvTag(8, ts, payload))
 }
+
 
 
 var dumpCnt int
