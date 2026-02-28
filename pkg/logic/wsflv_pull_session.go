@@ -40,12 +40,12 @@ type WsFlvPullSession struct {
 	lastStatTime  time.Time
 	lastStatBytes uint64
 
-	howenEnabled      bool
-	howenFrames       bool
-	howenJSON         string
-	remuxer           *howen.AVCRemuxer
-	g711Decoder       *transcoder.G711Decoder
-	g726Decoder       *transcoder.G726Decoder
+	howenEnabled bool
+	howenFrames  bool
+	howenJSON    string
+	remuxer      *howen.AVCRemuxer
+	g711Decoder  *transcoder.G711Decoder
+	//g726Decoder       *transcoder.G726Decoder
 	aacEncoder        *transcoder.AACEncoder
 	aacHeaderSent     bool
 	audioNextTS       uint32
@@ -74,7 +74,7 @@ func NewWsFlvPullSession(appName string, streamName string, group *Group, cps IC
 	}
 }
 
-func (s *WsFlvPullSession) Start(url string, wsHeaders map[string]string) error {
+func (s *WsFlvPullSession) Start(url string, wsHeaders map[string]string, cfg WsFlvPullConfig) error {
 
 	httpHeaders := http.Header{}
 
@@ -117,7 +117,8 @@ func (s *WsFlvPullSession) Start(url string, wsHeaders map[string]string) error 
 
 	go s.updateStatsLoop()
 
-	for !s.stopped.Load() {
+	retries := 0
+	for !s.stopped.Load() && retries < cfg.MaxRetries {
 
 		var err error
 
@@ -133,10 +134,16 @@ func (s *WsFlvPullSession) Start(url string, wsHeaders map[string]string) error 
 			return nil
 		}
 
-		Log.Warnf("wsflv pull error. stream=%s err=%v",
-			s.streamName, err)
+		Log.Errorf("wsflv pull error. app=%s stream=%s err=%v",
+			s.appName, s.streamName, err)
 
-		time.Sleep(3 * time.Second)
+		//time.Sleep(3 * time.Second)
+		time.Sleep(time.Duration(cfg.RemotePullTimeoutSec) * time.Second)
+		retries++
+	}
+
+	if retries >= cfg.MaxRetries {
+		Log.Errorf("wsflv pull failed after %v retries", cfg.MaxRetries)
 	}
 
 	return nil
