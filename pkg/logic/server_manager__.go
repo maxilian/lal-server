@@ -9,6 +9,7 @@
 package logic
 
 import (
+	"encoding/binary"
 	"fmt"
 	"net"
 	"net/http"
@@ -24,10 +25,13 @@ import (
 	"github.com/q191201771/lal/pkg/hls"
 	"github.com/q191201771/lal/pkg/httpflv"
 	"github.com/q191201771/lal/pkg/httpts"
+	"github.com/q191201771/lal/pkg/jt1078"
 	"github.com/q191201771/lal/pkg/rtmp"
 	"github.com/q191201771/lal/pkg/rtsp"
 	"github.com/q191201771/naza/pkg/defertaskthread"
+
 	//"github.com/felixge/fgprof"
+	"github.com/q191201771/lal/pkg/aac"
 )
 
 type ServerManager struct {
@@ -43,6 +47,7 @@ type ServerManager struct {
 	rtmpsServer   *rtmp.Server
 	rtspServer    *rtsp.Server
 	rtspsServer   *rtsp.Server
+	jt1078Server  *jt1078.Server
 	httpApiServer *HttpApiServer
 	pprofServer   *http.Server
 	wsrtspServer  *rtsp.WebsocketServer
@@ -58,6 +63,7 @@ type ServerManager struct {
 	ipBlacklist    IpBlacklist
 	httpflvPullers sync.Map
 	wsflvPullers   sync.Map
+	jtSessions     sync.Map
 }
 
 func NewServerManager(modOption ...ModOption) *ServerManager {
@@ -139,6 +145,17 @@ Doc: %s
 
 	if sm.option.Authentication == nil {
 		sm.option.Authentication = NewSimpleAuthCtx(sm.config.SimpleAuthConfig)
+	}
+
+	if sm.config.Jt1078.Enable {
+		sm.jt1078Server = jt1078.NewServer(sm.config.Jt1078.Addr, sm)
+		if err := sm.jt1078Server.Listen(); err != nil {
+			Log.Errorf("JT1078 start failed: %v", err)
+			return sm
+		}
+		go sm.jt1078Server.RunLoop()
+
+		Log.Infof("JT1078 server started at %s", sm.config.Jt1078.Addr)
 	}
 
 	return sm
@@ -823,4 +840,179 @@ func (sm *ServerManager) serveHls(writer http.ResponseWriter, req *http.Request)
 	}
 
 	sm.hlsServerHandler.ServeHTTP(writer, req)
+}
+
+type jtPubWrapper struct {
+	pub          ICustomizePubSessionContext
+	fuBuffer     []byte
+	aacSeqHeader []byte
+}
+
+func (sm *ServerManager) OnNewJt1078PubSession(
+	session *jt1078.ServerSession,
+) error {
+
+	streamName := fmt.Sprintf("jt1078_%s", session.UniqueKey())
+
+	// 1️⃣ Create group with custom app
+	group := sm.getOrCreateGroup("streaming", streamName)
+
+	// 2️⃣ Create customize pub session inside that group
+	pub, err := group.AddCustomizePubSession(streamName)
+	if err != nil {
+		Log.Errorf("AddCustomizePubSession failed: %v", err)
+		return err
+	}
+
+	sm.jtSessions.Store(session.UniqueKey(), &jtPubWrapper{
+		pub: pub,
+	})
+
+	Log.Infof("JT1078 stream created: %s", streamName)
+
+	return nil
+}
+func (sm *ServerManager) OnJt1078Frame(
+	session *jt1078.ServerSession,
+	payload []byte,
+	timestamp uint32,
+) {
+	v, ok := sm.jtSessions.Load(session.UniqueKey())
+	if !ok {
+		return
+	}
+	wrapper := v.(*jtPubWrapper)
+
+	if len(payload) <= 12 {
+		return
+	}
+
+	// Remove JT1078 RTP-like header
+	payload = payload[12:]
+
+	// Detect AAC by ADTS syncword
+	if len(payload) > 1 && payload[0] == 0xFF && (payload[1]&0xF0) == 0xF0 {
+		sm.handleAAC(wrapper, payload, timestamp)
+		return
+	}
+
+	// Otherwise treat as H.264 video
+	nalType := payload[0] & 0x1F
+	if nalType == 28 {
+		sm.handleFuA(wrapper, payload, timestamp)
+		return
+	}
+
+	nal := payload
+	size := uint32(len(nal))
+
+	buf := make([]byte, 4+len(nal))
+	binary.BigEndian.PutUint32(buf[:4], size)
+	copy(buf[4:], nal)
+
+	pkt := base.AvPacket{
+		PayloadType: base.AvPacketPtAvc,
+		Timestamp:   int64(timestamp) / 90,
+		Payload:     buf,
+	}
+	wrapper.pub.FeedAvPacket(pkt)
+}
+
+func (sm *ServerManager) handleFuA(
+	wrapper *jtPubWrapper,
+	payload []byte,
+	timestamp uint32,
+) {
+	if len(payload) < 2 {
+		return
+	}
+
+	fuIndicator := payload[0]
+	fuHeader := payload[1]
+
+	start := fuHeader&0x80 != 0
+	end := fuHeader&0x40 != 0
+	nalType := fuHeader & 0x1F
+
+	if start {
+		// Reconstruct original NAL header
+		nalHeader := (fuIndicator & 0xE0) | nalType
+
+		wrapper.fuBuffer = []byte{nalHeader}
+		wrapper.fuBuffer = append(wrapper.fuBuffer, payload[2:]...)
+		return
+	}
+
+	// Middle or End
+	wrapper.fuBuffer = append(wrapper.fuBuffer, payload[2:]...)
+
+	if end {
+		// Complete NAL assembled
+		nal := wrapper.fuBuffer
+		size := uint32(len(nal))
+
+		buf := make([]byte, 4+len(nal))
+		binary.BigEndian.PutUint32(buf[:4], size)
+		copy(buf[4:], nal)
+
+		pkt := base.AvPacket{
+			PayloadType: base.AvPacketPtAvc,
+			Timestamp:   int64(timestamp) / 90,
+			Payload:     buf,
+		}
+		wrapper.pub.FeedAvPacket(pkt)
+
+		wrapper.fuBuffer = nil
+	}
+}
+
+func (sm *ServerManager) OnDelJt1078PubSession(
+	session *jt1078.ServerSession,
+) {
+
+	v, ok := sm.jtSessions.Load(session.UniqueKey())
+	if !ok {
+		return
+	}
+
+	wrapper := v.(*jtPubWrapper)
+
+	sm.DelCustomizePubSession(wrapper.pub)
+
+	sm.jtSessions.Delete(session.UniqueKey())
+
+	Log.Infof("JT1078 stream removed: %s", session.UniqueKey())
+}
+
+func (sm *ServerManager) handleAAC(
+	wrapper *jtPubWrapper,
+	payload []byte,
+	timestamp uint32,
+) {
+	if len(payload) < aac.AdtsHeaderLength {
+		return
+	}
+
+	// Send AAC sequence header once
+	if wrapper.aacSeqHeader == nil {
+		seqHeader, err := aac.MakeAudioDataSeqHeaderWithAdtsHeader(payload[:aac.AdtsHeaderLength])
+		if err == nil {
+			pkt := base.AvPacket{
+				PayloadType: base.AvPacketPtAac,
+				Timestamp:   int64(timestamp) / 90,
+				Payload:     seqHeader,
+			}
+			wrapper.pub.FeedAvPacket(pkt)
+			wrapper.aacSeqHeader = seqHeader
+		}
+	}
+
+	// Strip ADTS header, feed raw AAC frame
+	rawFrame := payload[aac.AdtsHeaderLength:]
+	pkt := base.AvPacket{
+		PayloadType: base.AvPacketPtAac,
+		Timestamp:   int64(timestamp) / 90,
+		Payload:     rawFrame,
+	}
+	wrapper.pub.FeedAvPacket(pkt)
 }
