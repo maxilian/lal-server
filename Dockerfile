@@ -1,15 +1,14 @@
 # Build
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26-bookworm AS builder
 WORKDIR /lal
 ENV GOPROXY=https://goproxy.io,direct
 COPY . .
+RUN apt update && apt install -y --no-install-recommends build-essential
 RUN go build -o lalserver ./app/lalserver/main.go 
 
 # Output
 FROM debian:bookworm-slim
-
-
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+RUN apt update && apt install -y --no-install-recommends ca-certificates \
     && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
