@@ -128,5 +128,12 @@
     "log_group_interval_sec": 30,
     "log_group_max_group_num": 10,
     "log_group_max_sub_num_per_group": 10
+  },
+  "wsflv_pull": {
+    "max_retries": "5"
+  },
+  "jt1078": {
+    "enable": true, 
+    "addr": ":4001"
   }
 }
