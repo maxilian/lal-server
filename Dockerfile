@@ -4,7 +4,7 @@ WORKDIR /lal
 ENV CGO_ENABLED=1
 #ENV GOPROXY=https://goproxy.io,direct
 COPY . .
-RUN apt update && apt install -y --no-install-recommends build-essential \
+RUN sed -i 's/main/main contrib non-free non-free-firmware/' /etc/apt/sources.list && apt update && apt install -y --no-install-recommends build-essential \
     libfaac-dev \
     libfaad-dev
 RUN go mod download
