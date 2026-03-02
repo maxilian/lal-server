@@ -13,7 +13,7 @@ require github.com/lkmio/g726 v0.1.3 // indirect
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/lkmio/audio-transcoder v0.2.2
+	github.com/maxilian/audio-transcoder v0.2.2
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.66.1 // indirect

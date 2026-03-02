@@ -11,7 +11,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	transcoder "github.com/lkmio/audio-transcoder"
+	transcoder "github.com/maxilian/audio-transcoder"
 	"github.com/q191201771/lal/pkg/base"
 	howen "github.com/q191201771/lal/pkg/howen264"
 	"github.com/q191201771/lal/pkg/httpflv"
