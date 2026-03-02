@@ -3,7 +3,6 @@ FROM golang:1.26-bookworm AS builder
 WORKDIR /lal
 ENV CGO_ENABLED=1
 #ENV GOPROXY=https://goproxy.io,direct
-COPY . .
 RUN set -eux; \
     if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
         sed -i 's/^Components: .*/Components: main contrib non-free non-free-firmware/' /etc/apt/sources.list.d/debian.sources; \
@@ -13,6 +12,9 @@ RUN set -eux; \
     apt update && apt install -y --no-install-recommends build-essential \
     libfaac-dev \
     libfaad-dev
+
+COPY . .    
+RUN go mod tidy
 RUN go mod download
 RUN go build -o lalserver ./app/lalserver/main.go 
 
