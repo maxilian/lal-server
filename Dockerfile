@@ -4,7 +4,13 @@ WORKDIR /lal
 ENV CGO_ENABLED=1
 #ENV GOPROXY=https://goproxy.io,direct
 COPY . .
-RUN sed -i 's/main/main contrib non-free non-free-firmware/' /etc/apt/sources.list && apt update && apt install -y --no-install-recommends build-essential \
+RUN set -eux; \
+    if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+        sed -i 's/^Components: .*/Components: main contrib non-free non-free-firmware/' /etc/apt/sources.list.d/debian.sources; \
+    else \
+        echo "ERROR: debian.sources not found"; exit 1; \
+    fi; \
+    apt update && apt install -y --no-install-recommends build-essential \
     libfaac-dev \
     libfaad-dev
 RUN go mod download
