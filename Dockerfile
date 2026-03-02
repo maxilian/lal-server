@@ -1,9 +1,11 @@
 # Build
 FROM golang:1.26-bookworm AS builder
 WORKDIR /lal
+ENV CGO_ENABLED=1
 #ENV GOPROXY=https://goproxy.io,direct
 COPY . .
 RUN apt update && apt install -y --no-install-recommends build-essential
+RUN go mod download
 RUN go build -o lalserver ./app/lalserver/main.go 
 
 # Output
