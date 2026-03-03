@@ -134,7 +134,7 @@ func (s *WsFlvPullSession) Start(url string, wsHeaders map[string]string, cfg Ws
 			return nil
 		}
 
-		Log.Errorf("wsflv pull error. app=%s stream=%s err=%v",
+		Log.Errorf("wsflv pull error. AppName=%s StreamName=%s err=%v",
 			s.appName, s.streamName, err)
 
 		//time.Sleep(3 * time.Second)
@@ -198,7 +198,7 @@ func (s *WsFlvPullSession) updateStatsLoop() {
 func (s *WsFlvPullSession) Stop() {
 
 	if s.stopped.CompareAndSwap(false, true) {
-
+		Log.Infof("Kicking streaming connection. AppName=%s StreamName=%s", s.appName, s.streamName)
 		close(s.stopChan)
 
 		s.mu.Lock()
@@ -220,7 +220,7 @@ func (s *WsFlvPullSession) connectAndRead() error {
 		return err
 	}
 
-	Log.Infof("wsflv connected. stream=%s url=%s",
+	Log.Infof("wsflv connected. StreamName=%s url=%s",
 		s.streamName, s.url)
 
 	s.mu.Lock()
@@ -267,7 +267,7 @@ func (s *WsFlvPullSession) connectAndRead() error {
 
 			flvHeaderSkipped = true
 
-			Log.Infof("wsflv header skipped. stream=%s", s.streamName)
+			Log.Infof("wsflv header skipped. StreamName=%s", s.streamName)
 		}
 
 		for {
@@ -338,7 +338,7 @@ func (s *WsFlvPullSession) connectAndReadHowen() error {
 	if err != nil {
 		return err
 	}
-	Log.Infof("howen ws connected. stream=%s url=%s", s.streamName, s.url)
+	Log.Infof("howen ws connected. AppName=%s StreamName=%s url=%s", s.appName, s.streamName, s.url)
 
 	s.mu.Lock()
 	s.conn = conn
@@ -364,7 +364,7 @@ func (s *WsFlvPullSession) connectAndReadHowen() error {
 			Log.Errorf("send Howen control payload failed: %v", err)
 			return err
 		}
-		Log.Infof("Howen control payload sent. stream=%s", s.streamName)
+		Log.Infof("Howen control payload sent. AppName=%s StreamName=%s", s.appName, s.streamName)
 	}
 
 	for {
