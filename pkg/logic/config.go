@@ -209,16 +209,6 @@ func LoadConfAndInitLog(rawContent []byte) *Config {
 		base.OsExitAndWaitPressIfWindows(1)
 	}
 
-	if !j.Exist("wsflv_pull.max_retries") || config.WsFlvPullConfig.MaxRetries == 0 {
-		config.WsFlvPullConfig.MaxRetries = 5
-		Log.Warnf("config wsflv_pull.max_retries not exist or zero. set to default which is %d", config.WsFlvPullConfig.MaxRetries)
-	}
-
-	if !j.Exist("wsflv_pull.remote_pull_timeout_sec") || config.WsFlvPullConfig.RemotePullTimeoutSec == 0 {
-		config.WsFlvPullConfig.RemotePullTimeoutSec = 3
-		Log.Warnf("config wsflv_pull.max_retries not exist or zero. set to default which is %d", config.WsFlvPullConfig.RemotePullTimeoutSec)
-	}
-
 	// 初始化日志模块，注意，这一步尽量提前，使得后续的日志内容按我们的日志配置输出
 	//
 	// 日志配置项不存在时，设置默认值
@@ -260,6 +250,16 @@ func LoadConfAndInitLog(rawContent []byte) *Config {
 	if !j.Exist("log.assert_behavior") {
 		config.LogConfig.AssertBehavior = nazalog.AssertError
 		cacheLog = append(cacheLog, fmt.Sprintf("log.assert_behavior=%s", config.LogConfig.AssertBehavior.ReadableString()))
+	}
+
+	if !j.Exist("wsflv_pull.max_retries") || config.WsFlvPullConfig.MaxRetries == 0 {
+		config.WsFlvPullConfig.MaxRetries = 5
+		Log.Infof("config wsflv_pull.max_retries not exist or zero. set to default which is %d", config.WsFlvPullConfig.MaxRetries)
+	}
+
+	if !j.Exist("wsflv_pull.remote_pull_timeout_sec") || config.WsFlvPullConfig.RemotePullTimeoutSec == 0 {
+		config.WsFlvPullConfig.RemotePullTimeoutSec = 3
+		Log.Infof("config wsflv_pull.remote_pull_timeout_sec not exist or zero. set to default which is %d", config.WsFlvPullConfig.RemotePullTimeoutSec)
 	}
 
 	if err := Log.Init(func(option *nazalog.Option) {
